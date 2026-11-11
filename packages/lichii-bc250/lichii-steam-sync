@@ -1,0 +1,593 @@
+#!/usr/bin/env python3
+"""Add the Switch 2 games in ~/Games/Switch2 to Steam as Lichii shortcuts.
+
+The shortcuts start /usr/bin/lichii (the lichii-bc250 package); --emulator
+points them at another Lichii, for example an AppImage.
+
+What a run does:
+  1. Games: every .nup (also .nx/.xci/.nsp) in the folder gets a shortcut
+       lichii -f -g "<full path to the game file>"
+     named after the game's official title. --env NAME=VALUE (repeatable) puts
+     environment variables in front of it, for example
+     --env EDEN_NX2_FORCE_MESH_FALLBACK=1; the choice is remembered for later
+     runs and applied to every Lichii shortcut, --clear-env drops it again.
+  2. Artwork and metadata, the way Playnite does it:
+       - SteamGridDB when you have a (free) API key: in $SGDB_API_KEY or the
+         file ~/.config/steamgriddb_api_key. Gives cover, banner, hero, logo, icon.
+       - Otherwise Nintendo's own store (no key needed): the official title,
+         publisher, release date, description, and its key art, cut to Steam's
+         cover, banner, hero and icon sizes.
+     Artwork that is already in Steam's grid folder is left alone (so art you
+     picked yourself in Steam stays); --refresh-art fetches it again.
+  3. Shortcuts whose game file is gone: asks per shortcut, --prune removes them
+     without asking.
+  4. A game that already has a shortcut of another Lichii or Eglantine build
+     gets no second one; --migrate points those shortcuts at this emulator and
+     keeps their artwork, play time and Steam settings.
+
+Steam has to be closed while its shortcut list is written: the script stops it
+(only when something changed and no game is running) and starts it again.
+
+Usage: lichii-steam-sync [--dry-run] [--prune] [--refresh-art] [--migrate]
+                         [--env NAME=VALUE ...] [--clear-env] [--emulator PATH] [dir]
+"""
+
+import argparse
+import collections
+import difflib
+import hashlib
+import io
+import json
+import os
+import re
+import shlex
+import shutil
+import struct
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+HOME = os.path.expanduser('~')
+DEFAULT_DIR = os.path.join(HOME, 'Games/Switch2')
+DEFAULT_EMULATOR = '/usr/bin/lichii'
+GAME_EXTS = ('.nup', '.nx', '.xci', '.nsp')
+LAUNCH_FLAGS = '-f -g'
+TAG = 'Nintendo Switch 2 - Lichii'
+STATE_NAME = '.lichii-steam-sync.json'
+OLD_STATE_NAMES = ('.update_switch2.json',)        # the metadata cache of the earlier script
+SETTINGS_KEY = '_settings'                          # in the state file, next to the games
+STEAM_UNIT = 'steam-launcher.service'
+UA = 'lichii-steam-sync/1.0 (Steam shortcut script)'
+NINTENDO_SEARCH = 'https://searching.nintendo-europe.com/en/select'
+SGDB = 'https://www.steamgriddb.com/api/v2'
+# A shortcut whose program is one of these counts as a Switch 2 shortcut.
+EMULATOR_NAME = re.compile(r'^(lichii|eglantine)([-_.].*)?$', re.IGNORECASE)
+ENV_ASSIGN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+# Steam's grid folder names and sizes.
+ART = {'cover': ('%sp.png', (600, 900)), 'banner': ('%s.png', (920, 430)),
+       'hero': ('%s_hero.png', (1920, 620)), 'logo': ('%s_logo.png', None),
+       'icon': ('%s_icon.png', (256, 256))}
+
+# --------------------------------------------------------------- shortcuts.vdf
+END, SEC, STR, INT = 0x08, 0x00, 0x01, 0x02
+
+
+def _cstr(buf, off):
+    end = buf.index(b'\x00', off)
+    return buf[off:end].decode('utf-8', 'surrogateescape'), end + 1
+
+
+def vdf_parse(buf, off=0):
+    out = collections.OrderedDict()
+    while off < len(buf):
+        t = buf[off]
+        if t == END:
+            return out, off + 1
+        if t not in (SEC, STR, INT):
+            raise ValueError('unknown type %02x at offset %d' % (t, off))
+        name, off = _cstr(buf, off + 1)
+        if t == SEC:
+            val, off = vdf_parse(buf, off)
+        elif t == STR:
+            val, off = _cstr(buf, off)
+        else:
+            val = struct.unpack('<i', buf[off:off + 4])[0]
+            off += 4
+        key, n = name, 2
+        while key in out:
+            key, n = '%s#%d' % (name, n), n + 1
+        out[key] = val
+    raise ValueError('section without end byte')
+
+
+def vdf_serialize(members):
+    out = bytearray()
+    for key, val in members:
+        kb = str(key).split('#')[0].encode('utf-8', 'surrogateescape')
+        if isinstance(val, dict):
+            out += bytes([SEC]) + kb + b'\x00' + vdf_serialize(list(val.items())) + bytes([END])
+        elif isinstance(val, int):
+            out += bytes([INT]) + kb + b'\x00' + struct.pack('<i', val)
+        else:
+            out += bytes([STR]) + kb + b'\x00' + str(val).encode('utf-8', 'surrogateescape') + b'\x00'
+    return bytes(out)
+
+
+def vdf_read(path):
+    with open(path, 'rb') as fh:
+        data = fh.read()
+    top, _ = vdf_parse(data)
+    if vdf_serialize(list(top.items())) + b'\x08' != data:
+        raise SystemExit('%s does not round-trip, refusing to rewrite it' % path)
+    if not isinstance(top.get('shortcuts'), dict):
+        raise SystemExit('%s has no "shortcuts" section' % path)
+    return top
+
+
+def vdf_write(path, top):
+    shutil.copy2(path, path + '.bak-lichii-steam-sync')
+    tmp = '%s.tmp-%d' % (path, os.getpid())
+    with open(tmp, 'wb') as fh:
+        fh.write(vdf_serialize(list(top.items())) + b'\x08')
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def find_shortcuts_vdf():
+    best = None
+    for root in sorted({os.path.realpath(os.path.join(HOME, p))
+                        for p in ('.local/share/Steam', '.steam/root')}):
+        ud = os.path.join(root, 'userdata')
+        for user in os.listdir(ud) if os.path.isdir(ud) else []:
+            p = os.path.join(ud, user, 'config/shortcuts.vdf')
+            if os.path.isfile(p):
+                n = len(vdf_read(p)['shortcuts'])
+                if best is None or n > best[0]:
+                    best = (n, p)
+    if not best:
+        raise SystemExit('no shortcuts.vdf found -- is Steam installed, and has it run once?')
+    return best[1]
+
+
+def unquote(v):
+    v = (v or '').strip()
+    return v[1:-1] if len(v) > 1 and v[0] == v[-1] == '"' else v
+
+
+def is_switch_shortcut(entry):
+    return bool(EMULATOR_NAME.match(os.path.basename(unquote(entry.get('exe', '')))))
+
+
+def entry_game(entry):
+    """The game file a Lichii/Eglantine shortcut starts, or None for other shortcuts."""
+    if not is_switch_shortcut(entry):
+        return None
+    try:
+        toks = shlex.split(entry.get('LaunchOptions', ''))
+    except ValueError:
+        return None
+    for tok in toks:
+        if tok.lower().endswith(GAME_EXTS):
+            return os.path.abspath(tok)
+    return None
+
+
+def launch_options(game, env):
+    """Steam's launch options: optional environment, then Lichii's own arguments."""
+    args = '%s %s' % (LAUNCH_FLAGS, shlex.quote(game) if '"' in game else '"%s"' % game)
+    if env:
+        return '%s %%command%% %s' % (' '.join(shlex.quote(e) for e in env), args)
+    return args
+
+
+def new_appid(seed, taken):
+    x = int.from_bytes(hashlib.md5(seed.encode('utf-8', 'surrogateescape')).digest()[:4], 'big')
+    x = (x >> 1) | 0x80000000
+    while x in taken:
+        x = ((x + 1) & 0x7fffffff) | 0x80000000
+    taken.add(x)
+    return x
+
+
+def signed(appid):
+    return appid - 0x100000000 if appid >= 0x80000000 else appid
+
+
+def new_entry(appid, name, game, icon, emulator, env):
+    e = collections.OrderedDict()
+    e['appid'] = signed(appid)
+    e['appname'] = name
+    e['exe'] = '"%s"' % emulator
+    e['StartDir'] = '"%s/"' % os.path.dirname(game)
+    e['icon'] = icon
+    e['ShortcutPath'] = ''
+    e['LaunchOptions'] = launch_options(game, env)
+    e['IsHidden'] = 0
+    e['AllowDesktopConfig'] = 1
+    e['AllowOverlay'] = 1
+    e['OpenVR'] = 0
+    e['Devkit'] = 0
+    e['DevkitGameID'] = ''
+    e['DevkitOverrideAppID'] = 0
+    e['LastPlayTime'] = 0
+    e['FlatpakAppID'] = ''
+    e['sortas'] = ''
+    e['tags'] = collections.OrderedDict([('0', TAG)])
+    return e
+
+
+# ------------------------------------------------------------------------ steam
+def _run(cmd, timeout=60):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def steam_unit_active():
+    return _run(['systemctl', '--user', 'is-active', STEAM_UNIT]) == 'active'
+
+
+def steam_running():
+    return steam_unit_active() or bool(_run(['pgrep', '-u', str(os.getuid()), '-x', 'steam']))
+
+
+def game_running():
+    return bool(_run(['pgrep', '-u', str(os.getuid()), '-f', 'SteamLaunch AppId=']))
+
+
+def steam_stop():
+    how = 'unit' if steam_unit_active() else 'desktop'
+    if how == 'unit':
+        _run(['systemctl', '--user', 'stop', STEAM_UNIT])
+    elif shutil.which('steam'):
+        subprocess.Popen(['steam', '-shutdown'], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(60):
+        if not steam_running():
+            return how
+        time.sleep(1)
+    return None
+
+
+def steam_start(how):
+    if how == 'unit':
+        _run(['systemctl', '--user', 'unmask', '--runtime', STEAM_UNIT])
+        _run(['systemctl', '--user', 'start', STEAM_UNIT])
+    elif shutil.which('steam'):
+        subprocess.Popen(['steam'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+# ------------------------------------------------------------ names, metadata
+def clean_name(filename):
+    name = os.path.splitext(filename)[0]
+    name = re.sub(r'\[[^\]]*\]|\([^)]*\)', ' ', name)
+    name = re.split(r'\s\+\s', name)[0]
+    name = name.replace('_', ' ')
+    return re.sub(r'\s+', ' ', name).strip()
+
+
+def norm(s):
+    return re.sub(r'[^a-z0-9]+', '', s.lower())
+
+
+def http_get(url, headers=None, timeout=30):
+    req = urllib.request.Request(url, headers=dict({'User-Agent': UA}, **(headers or {})))
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def nintendo_lookup(name):
+    """Best Switch 2 match in Nintendo's (EU) store search, or None."""
+    q = urllib.parse.urlencode({'q': name, 'fq': 'type:GAME', 'rows': 30, 'wt': 'json'})
+    try:
+        docs = json.loads(http_get('%s?%s' % (NINTENDO_SEARCH, q)))['response']['docs']
+    except Exception as exc:                        # noqa: BLE001 - network is best effort
+        print('  ! Nintendo search failed: %s' % exc)
+        return None
+    best, score = None, 0.0
+    for d in docs:
+        if 'Nintendo Switch 2' not in (d.get('system_names_txt') or []):
+            continue
+        s = difflib.SequenceMatcher(None, norm(name), norm(d.get('title', ''))).ratio()
+        if s > score:
+            best, score = d, s
+    if not best or score < 0.75:
+        return None
+
+    def full(url):                                  # the 500w thumbnail -> the original
+        return url.replace('_image500w', '') if url else None
+    return {
+        'title': best.get('title'),
+        'publisher': best.get('publisher'),
+        'released': (best.get('dates_released_dts') or [''])[0][:10],
+        'genres': best.get('pretty_game_categories_txt') or [],
+        'age_rating': best.get('pretty_agerating_s'),
+        'description': best.get('excerpt') or best.get('product_catalog_description_s'),
+        'url': 'https://www.nintendo.com' + best['url'] if best.get('url') else None,
+        'square': full(best.get('image_url_sq_s')),
+        'wide': full(best.get('image_url_h16x9_s') or best.get('image_url_h2x1_s')),
+    }
+
+
+def sgdb_key():
+    key = os.environ.get('SGDB_API_KEY', '').strip()
+    p = os.path.join(HOME, '.config/steamgriddb_api_key')
+    if not key and os.path.isfile(p):
+        with open(p) as fh:
+            key = fh.read().strip()
+    return key or None
+
+
+def sgdb_art(key, title):
+    """{kind: url} from SteamGridDB for the closest game, best rated first."""
+    h = {'Authorization': 'Bearer ' + key}
+    try:
+        res = json.loads(http_get('%s/search/autocomplete/%s' % (SGDB, urllib.parse.quote(title)), h))
+        if not res.get('data'):
+            return {}
+        gid = res['data'][0]['id']
+        out = {}
+        for kind, path in (('cover', 'grids/game/%d?dimensions=600x900' % gid),
+                           ('banner', 'grids/game/%d?dimensions=920x430,460x215' % gid),
+                           ('hero', 'heroes/game/%d' % gid), ('logo', 'logos/game/%d' % gid),
+                           ('icon', 'icons/game/%d' % gid)):
+            data = json.loads(http_get('%s/%s' % (SGDB, path), h)).get('data') or []
+            if data:
+                out[kind] = data[0]['url']
+        return out
+    except Exception as exc:                        # noqa: BLE001
+        print('  ! SteamGridDB failed: %s' % exc)
+        return {}
+
+
+# --------------------------------------------------------------------- artwork
+def load_image(url):
+    from PIL import Image
+    try:
+        data = http_get(url)
+    except Exception:                               # noqa: BLE001 - try the thumbnail
+        data = http_get(url.replace('.jpg', '_image500w.jpg'))
+    im = Image.open(io.BytesIO(data))
+    im.load()
+    return im.convert('RGBA')
+
+
+def save_png(im, path):
+    tmp = path + '.tmp'
+    im.save(tmp, 'PNG')
+    os.replace(tmp, path)
+
+
+def make_from_nintendo(meta, kind):
+    """Steam's sizes cut from Nintendo's square and 16:9 key art."""
+    from PIL import ImageFilter, ImageOps, ImageEnhance
+    size = ART[kind][1]
+    if kind in ('banner', 'hero') and meta.get('wide'):
+        return ImageOps.fit(load_image(meta['wide']), size, centering=(0.5, 0.4))
+    if kind == 'icon' and meta.get('square'):
+        return ImageOps.fit(load_image(meta['square']), size)
+    if kind == 'cover' and meta.get('square'):
+        sq = load_image(meta['square'])
+        bg = ImageOps.fit(load_image(meta['wide']) if meta.get('wide') else sq, size)
+        bg = ImageEnhance.Brightness(bg.filter(ImageFilter.GaussianBlur(28))).enhance(0.55)
+        fg = sq.resize((size[0], size[0]))
+        bg.alpha_composite(fg, (0, (size[1] - size[0]) // 2))
+        return bg
+    return None
+
+
+def sync_art(appid, meta, sgdb, grid, refresh, dry):
+    """Write the missing artwork; -> path of the icon (or '')."""
+    got = []
+    for kind, (pattern, _) in ART.items():
+        dst = os.path.join(grid, pattern % appid)
+        if os.path.exists(dst) and not refresh:
+            continue
+        if dry:
+            got.append(kind)
+            continue
+        try:
+            if kind in sgdb:
+                im = load_image(sgdb[kind])
+                if kind == 'icon':
+                    im = im.resize(ART['icon'][1])
+            elif meta:
+                im = make_from_nintendo(meta, kind)
+            else:
+                im = None
+        except Exception as exc:                    # noqa: BLE001
+            print('  ! %s: %s' % (kind, exc))
+            im = None
+        if im is not None:
+            save_png(im, dst)
+            got.append(kind)
+    if got:
+        print('  art: %s%s' % (', '.join(got), ' (would fetch)' if dry else ''))
+    icon = os.path.join(grid, ART['icon'][0] % appid)
+    return icon if os.path.exists(icon) or (dry and 'icon' in got) else ''
+
+
+# ------------------------------------------------------------------------ main
+def ask(text):
+    if not sys.stdin.isatty():
+        print('%s  [no terminal -> kept]' % text)
+        return False
+    return input('%s  [y/N] ' % text).strip().lower() in ('y', 'yes')
+
+
+def load_state(games_dir):
+    for name in (STATE_NAME,) + OLD_STATE_NAMES:
+        try:
+            with open(os.path.join(games_dir, name)) as fh:
+                state = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if name != STATE_NAME:                      # keep only the metadata cache
+            state = {g: {'meta': st['meta']} for g, st in state.items()
+                     if isinstance(st, dict) and 'meta' in st}
+        return state
+    return {}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0],
+                                 epilog=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('dir', nargs='?', default=DEFAULT_DIR, help='game folder (default ~/Games/Switch2)')
+    ap.add_argument('--emulator', default=DEFAULT_EMULATOR,
+                    help='the Lichii the shortcuts start (default %s)' % DEFAULT_EMULATOR)
+    ap.add_argument('--env', action='append', default=None, metavar='NAME=VALUE',
+                    help='environment variable for every Lichii shortcut (repeatable, remembered)')
+    ap.add_argument('--clear-env', action='store_true', help='drop the remembered environment variables')
+    ap.add_argument('--migrate', action='store_true',
+                    help='point shortcuts of other Lichii/Eglantine builds at this emulator')
+    ap.add_argument('--prune', action='store_true', help='remove shortcuts of deleted games without asking')
+    ap.add_argument('--refresh-art', action='store_true', help='fetch the artwork again, replacing what is there')
+    ap.add_argument('--dry-run', action='store_true', help='show what would change, change nothing')
+    a = ap.parse_args()
+    games_dir = os.path.abspath(os.path.expanduser(a.dir))
+    emulator = os.path.abspath(os.path.expanduser(a.emulator))
+    dry = a.dry_run
+    if not os.path.isdir(games_dir):
+        raise SystemExit('%s does not exist: put the Switch 2 games there, or name the folder' % games_dir)
+    if not os.path.exists(emulator):
+        print('  ! %s is missing: the shortcuts start it' % emulator)
+
+    vdf = find_shortcuts_vdf()
+    grid = os.path.join(os.path.dirname(vdf), 'grid')
+    os.makedirs(grid, exist_ok=True)
+    state_path = os.path.join(games_dir, STATE_NAME)
+    state = load_state(games_dir)
+    settings = state.pop(SETTINGS_KEY, None)
+    settings = settings if isinstance(settings, dict) else {}
+    env = list(settings.get('env') or [])
+    if a.clear_env:
+        env = []
+    if a.env:
+        bad = [e for e in a.env if not ENV_ASSIGN.match(e)]
+        if bad:
+            raise SystemExit('--env needs NAME=VALUE, not: %s' % ', '.join(bad))
+        names = {e.split('=', 1)[0] for e in a.env}
+        env = [e for e in env if e.split('=', 1)[0] not in names] + a.env
+    settings['env'] = env
+    if env:
+        print('environment for the shortcuts: %s' % ' '.join(env))
+
+    top = vdf_read(vdf)
+    entries = top['shortcuts']
+    by_game = {}
+    taken = set()
+    for k, e in entries.items():
+        taken.add(int(e.get('appid', 0)) & 0xffffffff)
+        g = entry_game(e)
+        if g:
+            by_game.setdefault(g, k)
+
+    games = sorted(os.path.join(games_dir, f) for f in os.listdir(games_dir)
+                   if f.lower().endswith(GAME_EXTS) and not f.startswith('.'))
+    key = sgdb_key()
+    print('games: %d in %s; artwork from %s' % (len(games), games_dir,
+                                                'SteamGridDB' if key else "Nintendo's store"))
+    add, update = [], {}
+    for g in games:
+        st = state.get(g, {})
+        name = clean_name(os.path.basename(g))
+        if 'meta' not in st or a.refresh_art:
+            st['meta'] = nintendo_lookup(name)
+        meta = st['meta']
+        title = (meta or {}).get('title') or name
+        print('- %s' % title)
+        if meta:
+            print('  %s, %s; %s' % (meta.get('publisher') or '?', meta.get('released') or '?',
+                                    ', '.join(meta.get('genres') or []) or '-'))
+        else:
+            print('  (not found in Nintendo\'s store, name from the file)')
+        k = by_game.get(g)
+        appid = (int(entries[k]['appid']) & 0xffffffff) if k else new_appid(g, taken)
+        sgdb = sgdb_art(key, title) if key and (a.refresh_art or not os.path.exists(
+            os.path.join(grid, ART['cover'][0] % appid))) else {}
+        icon = sync_art(appid, meta, sgdb, grid, a.refresh_art, dry)
+        if k:
+            e = entries[k]
+            ours = os.path.realpath(unquote(e.get('exe', ''))) == os.path.realpath(emulator)
+            if not ours and not a.migrate:
+                print('  shortcut: kept, it starts %s (--migrate switches it to %s)'
+                      % (unquote(e.get('exe', '')), emulator))
+            else:
+                change = {}
+                if e.get('appname') != title:
+                    change['appname'] = title
+                if icon and e.get('icon') != icon:
+                    change['icon'] = icon
+                if not ours:
+                    change['exe'] = '"%s"' % emulator
+                if e.get('LaunchOptions') != launch_options(g, env):
+                    change['LaunchOptions'] = launch_options(g, env)
+                if change:
+                    update[k] = change
+                    print('  shortcut: update (%s)' % ', '.join(sorted(change)))
+                else:
+                    print('  shortcut: ok')
+        else:
+            add.append(new_entry(appid, title, g, icon, emulator, env))
+            print('  shortcut: new (appid %d)' % appid)
+        st['appid'] = appid
+        state[g] = st
+
+    dead = [k for g, k in by_game.items() if not os.path.exists(g)]
+    remove = []
+    for k in dead:
+        text = 'game file gone: "%s" (%s) -- remove the shortcut?' % (
+            entries[k].get('appname'), entry_game(entries[k]))
+        if a.prune:
+            print(text + '  [--prune -> yes]')
+            remove.append(k)
+        elif not dry and ask(text):
+            remove.append(k)
+        elif dry:
+            print(text + '  [dry run]')
+
+    if dry:
+        print('dry run: nothing changed')
+        return 0
+    state[SETTINGS_KEY] = settings
+    with open(state_path + '.tmp', 'w') as fh:
+        json.dump(state, fh, indent=1, sort_keys=True)
+    os.replace(state_path + '.tmp', state_path)
+    if not (add or update or remove):
+        print('Steam shortcuts are up to date.')
+        return 0
+
+    how = None
+    if steam_running():
+        if game_running():
+            raise SystemExit('a game is running: close it and run this again')
+        print('stopping Steam to write its shortcut list ...')
+        how = steam_stop()
+        if not how:
+            raise SystemExit('Steam did not stop, nothing written')
+    try:
+        top = vdf_read(vdf)                         # Steam may have saved it on exit
+        entries = top['shortcuts']
+        for k, change in update.items():
+            if k in entries:
+                entries[k].update(change)
+        for k in remove:
+            entries.pop(k, None)
+        items = list(entries.values()) + add
+        top['shortcuts'] = collections.OrderedDict((str(i), e) for i, e in enumerate(items))
+        vdf_write(vdf, top)
+        print('shortcuts: %d added, %d updated, %d removed' % (len(add), len(update), len(remove)))
+    finally:
+        if how:
+            print('starting Steam again')
+            steam_start(how)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

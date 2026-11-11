@@ -1,0 +1,157 @@
+name: Build and publish BC-250 emulator packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even when the fingerprint is unchanged
+        required: true
+        default: false
+        type: boolean
+  # Upstream Lichii publishes several releases a day; four checks a day pick
+  # up the newest one without rebuilding for every single release.
+  schedule:
+    - cron: '41 */6 * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build.yml'
+      - 'packages/**'
+      - 'scripts/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repo-release
+  cancel-in-progress: false
+
+env:
+  REPO_NAME: bc250-emulators
+  RELEASE_TAG: repo
+
+jobs:
+  lichii-bc250:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve Lichii release
+        id: lichii
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Repository variable: set it to a tag (build-<n>) to build that
+          # release instead of the newest one.
+          LICHII_TAG: ${{ vars.LICHII_TAG }}
+        run: |
+          set -euo pipefail
+          eval "$(./scripts/resolve-lichii.sh)"
+          {
+            echo "tag=$LICHII_TAG"
+            echo "build=$LICHII_BUILD"
+            echo "commit=$LICHII_COMMIT"
+          } >> "$GITHUB_OUTPUT"
+          echo "Using Lichii release: $LICHII_TAG ($LICHII_COMMIT)"
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LICHII_COMMIT: ${{ steps.lichii.outputs.commit }}
+        run: |
+          set -euo pipefail
+          fingerprint="$(./scripts/fingerprint.sh lichii-bc250)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          previous=""
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1 &&
+             gh release download "$RELEASE_TAG" -p lichii-bc250-info.env -D "$RUNNER_TEMP" --clobber 2>/dev/null; then
+            previous="$(sed -n 's/^LICHII_BC250_FINGERPRINT=//p' "$RUNNER_TEMP/lichii-bc250-info.env")"
+          fi
+          build=false
+          if [[ '${{ inputs.force }}' == true || "$fingerprint" != "$previous" ]]; then
+            build=true
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          printf 'fingerprint now:       %s\nfingerprint published: %s\nbuild: %s\n' \
+            "$fingerprint" "${previous:-none}" "$build"
+
+      - name: Free disk space
+        if: steps.decide.outputs.build == 'true'
+        run: |
+          # The hosted runner's preinstalled SDKs leave too little room for an
+          # LTO build of Lichii and its bundled dependencies.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker image prune -af >/dev/null
+          df -h /
+
+      - name: Seed the published repository
+        if: steps.decide.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Packages of other components stay in the database: start from
+          # everything the release has and let the build replace its own.
+          mkdir -p out/repo
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release download "$RELEASE_TAG" -p '*.pkg.tar.zst' -D out/repo || true
+          fi
+          ls -la out/repo
+
+      - name: Build lichii-bc250 and lichii-steam-sync
+        if: steps.decide.outputs.build == 'true'
+        env:
+          LICHII_TAG: ${{ steps.lichii.outputs.tag }}
+          LICHII_BUILD: ${{ steps.lichii.outputs.build }}
+          LICHII_COMMIT: ${{ steps.lichii.outputs.commit }}
+          LICHII_BC250_FINGERPRINT: ${{ steps.decide.outputs.fingerprint }}
+          PKGREL: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" -w /workspace \
+            -e REPO_NAME -e PKGREL \
+            -e LICHII_TAG -e LICHII_BUILD -e LICHII_COMMIT -e LICHII_BC250_FINGERPRINT \
+            archlinux:base-devel bash /workspace/scripts/ci-build.sh lichii-bc250
+          ls -la out/repo
+
+      - name: Publish
+        if: steps.decide.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LICHII_TAG: ${{ steps.lichii.outputs.tag }}
+          LICHII_BUILD: ${{ steps.lichii.outputs.build }}
+          PKGREL: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
+          cat > "$notes" <<EOF
+          pacman repository for the AMD BC-250 (Zen 2 + Cyan Skillfish). Add to \`/etc/pacman.conf\`:
+
+          \`\`\`ini
+          [$REPO_NAME]
+          SigLevel = Optional TrustAll
+          Server = https://github.com/${GITHUB_REPOSITORY}/releases/download/$RELEASE_TAG
+          \`\`\`
+
+          ## lichii-bc250 ${LICHII_BUILD}-${PKGREL}
+
+          Lichii [${LICHII_TAG}](https://github.com/zortos293/lichii/releases/tag/${LICHII_TAG}), built for the BC-250, plus \`lichii-steam-sync\`. No keys, firmware or games are included.
+          EOF
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --title "BC-250 emulator repository" --notes-file "$notes" --latest
+          else
+            gh release edit "$RELEASE_TAG" --notes-file "$notes"
+          fi
+          # Upload first, then delete what the repository no longer has, so the
+          # database never points at a package that is not there.
+          gh release upload "$RELEASE_TAG" out/repo/* --clobber
+          mapfile -t published < <(gh release view "$RELEASE_TAG" --json assets -q '.assets[].name')
+          for asset in "${published[@]}"; do
+            [[ -e "out/repo/$asset" ]] && continue
+            echo "Removing stale asset: $asset"
+            gh release delete-asset "$RELEASE_TAG" "$asset" --yes
+          done
