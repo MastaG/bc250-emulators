@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: Rebuild even when the fingerprint is unchanged
+        description: Rebuild every component even when its fingerprint is unchanged
         required: true
         default: false
         type: boolean
-  # Upstream Lichii publishes several releases a day; four checks a day pick
-  # up the newest one without rebuilding for every single release.
+  # Both upstreams publish releases several times a day; four checks a day pick
+  # up the newest without rebuilding for every single release.
   schedule:
     - cron: '41 */6 * * *'
   push:
@@ -32,115 +32,147 @@ env:
   RELEASE_TAG: repo
 
 jobs:
-  lichii-bc250:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Resolve Lichii release
-        id: lichii
+      - name: Resolve upstream releases
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
-          # Repository variable: set it to a tag (build-<n>) to build that
-          # release instead of the newest one.
+          # Repository variables: set one to a tag to build that release
+          # instead of the newest one.
           LICHII_TAG: ${{ vars.LICHII_TAG }}
+          KYTY_TAG: ${{ vars.KYTY_TAG }}
         run: |
           set -euo pipefail
           eval "$(./scripts/resolve-lichii.sh)"
+          eval "$(./scripts/resolve-kytyps5-native.sh)"
           {
-            echo "tag=$LICHII_TAG"
-            echo "build=$LICHII_BUILD"
-            echo "commit=$LICHII_COMMIT"
+            echo "lichii_tag=$LICHII_TAG"
+            echo "lichii_build=$LICHII_BUILD"
+            echo "lichii_commit=$LICHII_COMMIT"
+            echo "kyty_tag=$KYTY_TAG"
+            echo "kyty_commit=$KYTY_COMMIT"
           } >> "$GITHUB_OUTPUT"
-          echo "Using Lichii release: $LICHII_TAG ($LICHII_COMMIT)"
+          echo "Lichii:         $LICHII_TAG ($LICHII_COMMIT)"
+          echo "KytyPS5-Native: $KYTY_TAG ($KYTY_COMMIT)"
 
-      - name: Decide whether to build
+      - name: Decide what to build
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
-          LICHII_COMMIT: ${{ steps.lichii.outputs.commit }}
+          LICHII_COMMIT: ${{ steps.resolve.outputs.lichii_commit }}
+          KYTY_COMMIT: ${{ steps.resolve.outputs.kyty_commit }}
         run: |
           set -euo pipefail
-          fingerprint="$(./scripts/fingerprint.sh lichii-bc250)"
-          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
-          previous=""
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1 &&
-             gh release download "$RELEASE_TAG" -p lichii-bc250-info.env -D "$RUNNER_TEMP" --clobber 2>/dev/null; then
-            previous="$(sed -n 's/^LICHII_BC250_FINGERPRINT=//p' "$RUNNER_TEMP/lichii-bc250-info.env")"
-          fi
-          build=false
-          if [[ '${{ inputs.force }}' == true || "$fingerprint" != "$previous" ]]; then
-            build=true
-          fi
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          printf 'fingerprint now:       %s\nfingerprint published: %s\nbuild: %s\n' \
-            "$fingerprint" "${previous:-none}" "$build"
+          have_release=false
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 && have_release=true
+          components=()
+          # component  info-file key
+          while read -r component key; do
+            fingerprint="$(./scripts/fingerprint.sh "$component")"
+            echo "${key,,}=$fingerprint" >> "$GITHUB_OUTPUT"
+            previous=""
+            if [[ "$have_release" == true ]] &&
+               gh release download "$RELEASE_TAG" -p "$component-info.env" -D "$RUNNER_TEMP" --clobber 2>/dev/null; then
+              previous="$(sed -n "s/^$key=//p" "$RUNNER_TEMP/$component-info.env")"
+            fi
+            if [[ '${{ inputs.force }}' == true || "$fingerprint" != "$previous" ]]; then
+              components+=("$component")
+            fi
+            printf '%-20s now %s, published %s\n' "$component" "$fingerprint" "${previous:-none}"
+          done <<'EOF'
+          lichii-bc250 LICHII_BC250_FINGERPRINT
+          kytyps5-native-git KYTYPS5_NATIVE_GIT_FINGERPRINT
+          EOF
+          echo "components=${components[*]}" >> "$GITHUB_OUTPUT"
+          echo "Build: ${components[*]:-nothing}"
 
       - name: Free disk space
-        if: steps.decide.outputs.build == 'true'
+        if: steps.decide.outputs.components != ''
         run: |
-          # The hosted runner's preinstalled SDKs leave too little room for an
-          # LTO build of Lichii and its bundled dependencies.
+          # The hosted runner's preinstalled SDKs leave too little room for the
+          # LTO builds and their bundled dependencies.
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker image prune -af >/dev/null
           df -h /
 
       - name: Seed the published repository
-        if: steps.decide.outputs.build == 'true'
+        if: steps.decide.outputs.components != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Packages of other components stay in the database: start from
-          # everything the release has and let the build replace its own.
+          # Everything the release has, so components not built this run keep
+          # their packages, sidecars and database entries; each build replaces
+          # only its own.
           mkdir -p out/repo
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release download "$RELEASE_TAG" -p '*.pkg.tar.zst' -D out/repo || true
+            gh release download "$RELEASE_TAG" -D out/repo || true
           fi
           ls -la out/repo
 
-      - name: Build lichii-bc250 and lichii-steam-sync
-        if: steps.decide.outputs.build == 'true'
+      - name: Build
+        id: build
+        if: steps.decide.outputs.components != ''
         env:
-          LICHII_TAG: ${{ steps.lichii.outputs.tag }}
-          LICHII_BUILD: ${{ steps.lichii.outputs.build }}
-          LICHII_COMMIT: ${{ steps.lichii.outputs.commit }}
-          LICHII_BC250_FINGERPRINT: ${{ steps.decide.outputs.fingerprint }}
+          COMPONENTS: ${{ steps.decide.outputs.components }}
+          LICHII_TAG: ${{ steps.resolve.outputs.lichii_tag }}
+          LICHII_BUILD: ${{ steps.resolve.outputs.lichii_build }}
+          LICHII_COMMIT: ${{ steps.resolve.outputs.lichii_commit }}
+          LICHII_BC250_FINGERPRINT: ${{ steps.decide.outputs.lichii_bc250_fingerprint }}
+          KYTY_TAG: ${{ steps.resolve.outputs.kyty_tag }}
+          KYTY_COMMIT: ${{ steps.resolve.outputs.kyty_commit }}
+          KYTYPS5_NATIVE_GIT_FINGERPRINT: ${{ steps.decide.outputs.kytyps5_native_git_fingerprint }}
           PKGREL: ${{ github.run_number }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2086
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/workspace" -w /workspace \
             -e REPO_NAME -e PKGREL \
             -e LICHII_TAG -e LICHII_BUILD -e LICHII_COMMIT -e LICHII_BC250_FINGERPRINT \
-            archlinux:base-devel bash /workspace/scripts/ci-build.sh lichii-bc250
-          ls -la out/repo
+            -e KYTY_TAG -e KYTY_COMMIT -e KYTYPS5_NATIVE_GIT_FINGERPRINT \
+            archlinux:base-devel bash /workspace/scripts/ci-build.sh $COMPONENTS
 
       - name: Publish
-        if: steps.decide.outputs.build == 'true'
+        # Also after a partly failed build: ci-build.sh still wrote a database
+        # of everything that did build.
+        if: always() && steps.decide.outputs.components != '' && hashFiles('out/repo/bc250-emulators.db') != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          LICHII_TAG: ${{ steps.lichii.outputs.tag }}
-          LICHII_BUILD: ${{ steps.lichii.outputs.build }}
-          PKGREL: ${{ github.run_number }}
         run: |
           set -euo pipefail
+          value() { sed -n "s/^$2=//p" "out/repo/$1" 2>/dev/null; }
           notes="$RUNNER_TEMP/notes.md"
-          cat > "$notes" <<EOF
-          pacman repository for the AMD BC-250 (Zen 2 + Cyan Skillfish). Add to \`/etc/pacman.conf\`:
-
-          \`\`\`ini
-          [$REPO_NAME]
-          SigLevel = Optional TrustAll
-          Server = https://github.com/${GITHUB_REPOSITORY}/releases/download/$RELEASE_TAG
-          \`\`\`
-
-          ## lichii-bc250 ${LICHII_BUILD}-${PKGREL}
-
-          Lichii [${LICHII_TAG}](https://github.com/zortos293/lichii/releases/tag/${LICHII_TAG}), built for the BC-250, plus \`lichii-steam-sync\`. No keys, firmware or games are included.
-          EOF
+          {
+            echo "pacman repository for the AMD BC-250 (Zen 2 + Cyan Skillfish). Add to \`/etc/pacman.conf\`:"
+            echo
+            echo '```ini'
+            echo "[$REPO_NAME]"
+            echo 'SigLevel = Optional TrustAll'
+            echo "Server = https://github.com/${GITHUB_REPOSITORY}/releases/download/$RELEASE_TAG"
+            echo '```'
+            echo
+            echo 'Packaging only: no keys, firmware, BIOS files or games are included. See the README for setup.'
+            if [[ -f out/repo/lichii-bc250-info.env ]]; then
+              tag="$(value lichii-bc250-info.env LICHII_BC250_TAG)"
+              echo
+              echo "## lichii-bc250 $(value lichii-bc250-info.env LICHII_BC250_PKGVER)-$(value lichii-bc250-info.env LICHII_BC250_PKGREL)"
+              echo
+              echo "Lichii [$tag](https://github.com/zortos293/lichii/releases/tag/$tag), built for the BC-250, plus \`lichii-steam-sync\`."
+            fi
+            if [[ -f out/repo/kytyps5-native-git-info.env ]]; then
+              echo
+              echo "## kytyps5-native-git $(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_PKGVER)-$(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_PKGREL)"
+              echo
+              echo "KytyPS5-Native, upstream release \`$(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_TAG)\`, plus \`kytyps5-steam-sync\`."
+            fi
+          } > "$notes"
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --title "BC-250 emulator repository" --notes-file "$notes" --latest
           else
