@@ -34,9 +34,16 @@ failed=()
 for component in "$@"; do
     printf '::group::build %s\n' "$component"
     case "$component" in
-        lichii-bc250)
+        lichii)
             as_builder \
                 LICHII_TAG="${LICHII_TAG:?}" LICHII_BUILD="${LICHII_BUILD:?}" LICHII_COMMIT="${LICHII_COMMIT:?}" \
+                LICHII_PKGREL="$PKGREL" \
+                LICHII_FINGERPRINT="${LICHII_FINGERPRINT:-unknown}" \
+                /workspace/scripts/build-lichii-package.sh || failed+=("$component")
+            ;;
+        lichii-bc250)
+            as_builder \
+                LICHII_BC250_COMMIT="${LICHII_BC250_COMMIT:?}" \
                 LICHII_BC250_PKGREL="$PKGREL" \
                 LICHII_BC250_FINGERPRINT="${LICHII_BC250_FINGERPRINT:-unknown}" \
                 /workspace/scripts/build-lichii-bc250-package.sh || failed+=("$component")

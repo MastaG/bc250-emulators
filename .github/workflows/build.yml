@@ -50,15 +50,18 @@ jobs:
         run: |
           set -euo pipefail
           eval "$(./scripts/resolve-lichii.sh)"
+          eval "$(./scripts/resolve-lichii-bc250.sh)"
           eval "$(./scripts/resolve-kytyps5-native.sh)"
           {
             echo "lichii_tag=$LICHII_TAG"
             echo "lichii_build=$LICHII_BUILD"
             echo "lichii_commit=$LICHII_COMMIT"
+            echo "lichii_bc250_commit=$LICHII_BC250_COMMIT"
             echo "kyty_tag=$KYTY_TAG"
             echo "kyty_commit=$KYTY_COMMIT"
           } >> "$GITHUB_OUTPUT"
           echo "Lichii:         $LICHII_TAG ($LICHII_COMMIT)"
+          echo "Lichii BC-250:  main ($LICHII_BC250_COMMIT)"
           echo "KytyPS5-Native: $KYTY_TAG ($KYTY_COMMIT)"
 
       - name: Decide what to build
@@ -66,6 +69,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           LICHII_COMMIT: ${{ steps.resolve.outputs.lichii_commit }}
+          LICHII_BC250_COMMIT: ${{ steps.resolve.outputs.lichii_bc250_commit }}
           KYTY_COMMIT: ${{ steps.resolve.outputs.kyty_commit }}
         run: |
           set -euo pipefail
@@ -86,6 +90,7 @@ jobs:
             fi
             printf '%-20s now %s, published %s\n' "$component" "$fingerprint" "${previous:-none}"
           done <<'EOF'
+          lichii LICHII_FINGERPRINT
           lichii-bc250 LICHII_BC250_FINGERPRINT
           kytyps5-native-git KYTYPS5_NATIVE_GIT_FINGERPRINT
           EOF
@@ -124,6 +129,8 @@ jobs:
           LICHII_TAG: ${{ steps.resolve.outputs.lichii_tag }}
           LICHII_BUILD: ${{ steps.resolve.outputs.lichii_build }}
           LICHII_COMMIT: ${{ steps.resolve.outputs.lichii_commit }}
+          LICHII_FINGERPRINT: ${{ steps.decide.outputs.lichii_fingerprint }}
+          LICHII_BC250_COMMIT: ${{ steps.resolve.outputs.lichii_bc250_commit }}
           LICHII_BC250_FINGERPRINT: ${{ steps.decide.outputs.lichii_bc250_fingerprint }}
           KYTY_TAG: ${{ steps.resolve.outputs.kyty_tag }}
           KYTY_COMMIT: ${{ steps.resolve.outputs.kyty_commit }}
@@ -135,7 +142,8 @@ jobs:
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/workspace" -w /workspace \
             -e REPO_NAME -e PKGREL \
-            -e LICHII_TAG -e LICHII_BUILD -e LICHII_COMMIT -e LICHII_BC250_FINGERPRINT \
+            -e LICHII_TAG -e LICHII_BUILD -e LICHII_COMMIT -e LICHII_FINGERPRINT \
+            -e LICHII_BC250_COMMIT -e LICHII_BC250_FINGERPRINT \
             -e KYTY_TAG -e KYTY_COMMIT -e KYTYPS5_NATIVE_GIT_FINGERPRINT \
             archlinux:base-devel bash /workspace/scripts/ci-build.sh $COMPONENTS
 
@@ -159,12 +167,19 @@ jobs:
             echo '```'
             echo
             echo 'Packaging only: no keys, firmware, BIOS files or games are included. See the README for setup.'
-            if [[ -f out/repo/lichii-bc250-info.env ]]; then
-              tag="$(value lichii-bc250-info.env LICHII_BC250_TAG)"
+            if [[ -f out/repo/lichii-info.env ]]; then
+              tag="$(value lichii-info.env LICHII_TAG)"
+              echo
+              echo "## lichii $(value lichii-info.env LICHII_PKGVER)-$(value lichii-info.env LICHII_PKGREL)"
+              echo
+              echo "Lichii [$tag](https://github.com/zortos293/lichii/releases/tag/$tag), built for the BC-250, plus \`lichii-steam-sync\`."
+            fi
+            if [[ -n "$(value lichii-bc250-info.env LICHII_BC250_COMMIT)" ]]; then
+              commit="$(value lichii-bc250-info.env LICHII_BC250_COMMIT)"
               echo
               echo "## lichii-bc250 $(value lichii-bc250-info.env LICHII_BC250_PKGVER)-$(value lichii-bc250-info.env LICHII_BC250_PKGREL)"
               echo
-              echo "Lichii [$tag](https://github.com/zortos293/lichii/releases/tag/$tag), built for the BC-250, plus \`lichii-steam-sync\`."
+              echo "The BC-250 Lichii fork, main at [\`${commit:0:9}\`](https://github.com/lethevimlet/lichii-bc250/commit/$commit)."
             fi
             if [[ -f out/repo/kytyps5-native-git-info.env ]]; then
               echo

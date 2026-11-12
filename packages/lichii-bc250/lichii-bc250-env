@@ -1,0 +1,36 @@
+# BC-250 tuning from the fork's launcher (tools/bc250/bc250-install.sh), sourced
+# by /usr/bin/lichii-bc250 and /usr/bin/lichii-bc250-cli. A variable that is
+# already set (a Steam launch option, the shell) wins over these.
+#
+# Texture cache: capped so it does not take the RAM the game and the compositor
+# live in (v6: 1.5/2 GB left ~2 GB more free in play than 3/3.5 GB).
+: "${EDEN_NX2_TC_EXPECTED_MIB:=1536}"
+: "${EDEN_NX2_TC_CRITICAL_MIB:=2048}"
+# Split GPU thread: the back half runs on its own thread.
+: "${EDEN_NX2_SPLIT:=2}"
+# Batch GPU fence syncpoints.
+: "${EDEN_NX2_FENCE_BATCH:=1}"
+# The game runs a frame ahead of the GPU threads.
+: "${EDEN_NX2_FRAMES_AHEAD:=2}"
+# Cached pipelines build when first seen (boots faster).
+: "${EDEN_NX2_PRELOAD_ALL_PIPELINES:=0}"
+# New shaders on 4 workers and 2 driver threads, memory given back after large
+# ones: the default (all threads) took 3.7 GB at once in Hyrule Field.
+: "${EDEN_NX2_PIPELINE_WORKERS:=4}"
+: "${EDEN_NX2_PIPELINE_DRIVER_THREADS:=2}"
+: "${EDEN_NX2_IR_POOL_CAP_MIB:=64}"
+# Mesh draws through Lichii's compute fallback (the fork's improved one), not
+# the driver's mesh shaders: on Bazzite the BC-250 has none, but this repo's
+# Mesa offers them (DirectMesh), and it does not run Ocarina of Time's yet.
+# Any value turns the fallback on, so LICHII_BC250_NATIVE_MESH=1 is the way to
+# try DirectMesh instead.
+if [[ -z "${LICHII_BC250_NATIVE_MESH:-}" ]]; then
+    : "${EDEN_NX2_FORCE_MESH_FALLBACK:=1}"
+    export EDEN_NX2_FORCE_MESH_FALLBACK
+fi
+export EDEN_NX2_TC_EXPECTED_MIB EDEN_NX2_TC_CRITICAL_MIB EDEN_NX2_SPLIT EDEN_NX2_FENCE_BATCH \
+    EDEN_NX2_FRAMES_AHEAD EDEN_NX2_PRELOAD_ALL_PIPELINES EDEN_NX2_PIPELINE_WORKERS \
+    EDEN_NX2_PIPELINE_DRIVER_THREADS EDEN_NX2_IR_POOL_CAP_MIB
+# Left out because they are for Ocarina of Time only (its 30 fps): the fork's
+# launcher also sets EDEN_NX2_VSYNC_HZ=30, EDEN_NX2_SWAP_INTERVAL=2 and
+# EDEN_VI2_MAX_RESOLUTION_MODE=1. Add them per game as launch options.

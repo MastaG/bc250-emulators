@@ -1,73 +1,92 @@
 # Maintainer: MastaG
 #
-# Lichii (https://github.com/zortos293/lichii): a Nintendo Switch 2 emulator
-# (Eden-based), built for the BC-250 instead of upstream's generic x86-64
-# AppImage. Built from upstream's newest release (tag build-<n>), which
-# scripts/resolve-lichii.sh pins into @LICHII_TAG@ / @LICHII_COMMIT@; CI
-# rebuilds it whenever that release moves. pkgver is upstream's build number.
+# lichii-bc250 (https://github.com/lethevimlet/lichii-bc250): a fork of Lichii
+# (packages/lichii) tuned for the BC-250 itself: RADV query/semaphore fixes,
+# the task/mesh shader fallback Zelda: Ocarina of Time needs, memory work for
+# 16 GB of shared RAM and frame pacing. The fork has no releases: CI builds the
+# newest commit of its main branch, which scripts/resolve-lichii-bc250.sh pins
+# into @LICHII_BC250_COMMIT@, and rebuilds when it moves.
 #
-# Split package:
-# - lichii-bc250: the emulator (/usr/bin/lichii), the command-line version
-#   (/usr/bin/lichii-cli) and the multiplayer room server (/usr/bin/lichii-room).
-#   Upstream names the last two eden-cli and eden-room, the names the Eden
-#   emulator installs too; they are renamed so both can be installed.
-# - lichii-steam-sync, our own (arch any): adds the Switch 2 games of a folder
-#   (~/Games/Switch2) to Steam as lichii shortcuts, with artwork. lichii-bc250
-#   depends on it, so it is always installed with the emulator.
+# Built the way packages/lichii is (the same flags, system libraries and
+# ThinLTO), with the fork's own PGO profile (lichii-linux.profdata, the one its
+# installer uses). Its installer, tools/bc250/bc250-install.sh, builds only the
+# command-line version inside a Fedora distrobox; this package also builds the
+# Qt emulator and the room server. What the installer adds besides the build:
+# - a launcher that sets the fork's BC-250 tuning variables: that is
+#   lichii-bc250-env, sourced by /usr/bin/lichii-bc250 and lichii-bc250-cli.
+#   It also sends mesh draws to Lichii's compute fallback
+#   (EDEN_NX2_FORCE_MESH_FALLBACK=1), which the fork's installer does not need:
+#   Bazzite's Mesa has no mesh shaders, this repo's (DirectMesh) does;
+#   The two Ocarina-of-Time-only ones (30 Hz tick, swap interval 2) are left
+#   out; the example in /usr/share/doc/lichii-bc250 has them;
+# - its per-game settings for Ocarina of Time (oot.ini), installed as that
+#   example, not used by default;
+# - system tuning (UMA, swappiness, compaction, swapfile, TTM limit): outside
+#   a package's business, see the README.
 #
-# Differences from upstream's linux-x86_64-pgo release:
-# - CPU target -march=znver2 -mtune=znver2 (upstream: generic x86-64), minus
-#   the two Zen 2 instructions the BC-250 cannot use: RDSEED is broken on this
-#   APU (every call "succeeds" with 0xffffffff; the kernel hides it at boot,
-#   "RDSEED is not reliable on this platform; disabling") and XSAVES is not
-#   used by the kernel here. -mno-rdseed keeps compiled code from calling
-#   RDSEED directly instead of asking CPUID; -mno-xsaves is for exactness only
-#   (XSAVES is a kernel-mode instruction). All other packages in this repo use
-#   -march=x86-64-v3, which has neither.
-# - The same PGO profile as upstream (eglantine.profdata, trained by upstream
-#   with clang 23, which is also Arch's clang), plus ThinLTO (upstream's Linux
-#   builds have no LTO).
-# - The system's Qt 6, SDL3, FFmpeg, Boost, OpenSSL, fmt and other libraries
-#   where Arch has them; Vulkan headers and utility libraries bundled, as
-#   upstream's CI does. CPM fetches and builds in the rest (Opus, zstd, cubeb,
-#   QuaZip, ...) while configuring, so build() needs the network.
-# - No update checker: pacman updates it.
-pkgbase=lichii-bc250
-pkgname=('lichii-bc250' 'lichii-steam-sync')
-_name=lichii
-_tag=@LICHII_TAG@
-_commit=@LICHII_COMMIT@
-pkgver=@LICHII_BUILD@
+# Installs beside packages/lichii: the binaries are lichii-bc250,
+# lichii-bc250-cli and lichii-bc250-room, the real ones and libnxformat live in
+# /usr/lib/lichii-bc250, and the desktop entry, icon, MIME and AppStream files
+# carry the fork's own id (io.github.lethevimlet.lichii-bc250). Both read the
+# same Eden folders (~/.config/eden, ~/.local/share/eden, ~/.cache/eden), as
+# the fork's README says.
+#
+# epoch=1: the name lichii-bc250 belonged to the plain Lichii build (now
+# packages/lichii, which replaces 'lichii-bc250<1:0') until 2026-11-12.
+pkgname=lichii-bc250
+_name=lichii-bc250
+_commit=@LICHII_BC250_COMMIT@
+epoch=1
+pkgver=0
 pkgrel=@PKGREL@
-pkgdesc="Nintendo Switch 2 emulator (Lichii), built for the BC-250 with PGO and ThinLTO"
+pkgdesc="Nintendo Switch 2 emulator (lethevimlet's Lichii fork, tuned for the BC-250), with PGO and ThinLTO"
 arch=('x86_64')
-url="https://github.com/zortos293/lichii"
+url="https://github.com/lethevimlet/lichii-bc250"
 license=('GPL-3.0-or-later')
+depends=('qt6-base' 'qt6-charts' 'sdl3' 'ffmpeg' 'boost-libs' 'openssl' 'fmt'
+         'libusb' 'enet' 'lz4' 'brotli' 'zlib' 'libxkbcommon' 'libglvnd'
+         'gcc-libs' 'glibc' 'vulkan-icd-loader' 'libpulse' 'alsa-lib'
+         'hicolor-icon-theme' 'lichii-steam-sync')
 makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'llvm' 'glslang' 'spirv-tools'
-             'spirv-headers' 'qt6-base' 'qt6-charts' 'qt6-tools' 'sdl3' 'ffmpeg'
-             'boost' 'boost-libs' 'openssl' 'fmt' 'libusb' 'enet' 'lz4' 'brotli'
-             'zlib' 'libxkbcommon' 'nlohmann-json' 'nasm' 'pkgconf' 'mesa' 'libva'
-             'libvdpau' 'libpulse' 'alsa-lib' 'vulkan-icd-loader')
+             'spirv-headers' 'qt6-tools' 'boost' 'nlohmann-json' 'nasm' 'pkgconf'
+             'mesa' 'libva' 'libvdpau')
+optdepends=('gamemode: Feral GameMode while a game runs')
 # Our own LTO and flags below.
 options=('!lto' '!debug' 'strip')
-source=("$_name::git+https://github.com/zortos293/lichii.git#commit=${_commit}"
-        'lichii-steam-sync')
+source=("$_name::git+https://github.com/lethevimlet/lichii-bc250.git#commit=${_commit}"
+        'lichii-bc250-env'
+        'lichii-bc250-wrapper')
 sha256sums=('SKIP'
+            'SKIP'
             'SKIP')
 
+pkgver() {
+    cd "$_name"
+    # No releases or tags: the commit count rises with every push to main.
+    printf 'r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
+}
+
+prepare() {
+    cd "$_name"
+    # libnxformat goes to the fork's own folder, so it does not clash with
+    # packages/lichii's /usr/lib/lichii/libnxformat.so. The binaries move
+    # there too (package()), so the run path is the folder itself.
+    local cm=src/yuzu/CMakeLists.txt
+    grep -qF 'INSTALL_RPATH "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/lichii")' "$cm"
+    grep -qF 'DESTINATION "${CMAKE_INSTALL_LIBDIR}/lichii")' "$cm"
+    sed -i -e 's|INSTALL_RPATH "\\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/lichii")|INSTALL_RPATH "\\$ORIGIN")|' \
+        -e 's|DESTINATION "${CMAKE_INSTALL_LIBDIR}/lichii")|DESTINATION "${CMAKE_INSTALL_LIBDIR}/lichii-bc250")|' "$cm"
+    grep -qF 'INSTALL_RPATH "\$ORIGIN")' "$cm"
+}
+
 build() {
-    local profile="$srcdir/$_name/eglantine.profdata"
-    # BC-250: Zen 2 without RDSEED/XSAVES (see the header). Upstream's PGO
-    # warnings are silenced the same way its CI does; -Werror is off because
-    # our flags are not the ones upstream tests with. makepkg's own flags are
-    # replaced on purpose: the emulator's JIT maps guest code itself, and
-    # upstream only ever tests its own flags.
+    local profile="$srcdir/$_name/lichii-linux.profdata"
+    # BC-250: Zen 2 without RDSEED/XSAVES, as in packages/lichii (see there).
     local cpu="-march=znver2 -mtune=znver2 -mno-rdseed -mno-xsaves"
     local pgo="-fprofile-use=$profile -Wno-backend-plugin -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
     export CFLAGS="$cpu -flto=thin $pgo"
     export CXXFLAGS="$CFLAGS"
     export LDFLAGS="-fuse-ld=lld -flto=thin -Wl,-O2"
-    # CPM's downloads stay inside the build tree.
     export CPM_SOURCE_CACHE="$srcdir/cpm-cache"
 
     cmake -S "$_name" -B build -G Ninja \
@@ -87,40 +106,54 @@ build() {
         -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
         -DENABLE_QT_TRANSLATION=ON \
         -DENABLE_UPDATE_CHECKER=OFF \
+        -DENABLE_WEB_SERVICE=OFF \
         -DENABLE_WERROR=OFF \
         -DUSE_DISCORD_PRESENCE=OFF \
-        -DLICHII_BUILD_TAG="${_tag}" \
+        -DLICHII_BUILD_TAG="lichii-bc250-${pkgver}" \
         -DLICHII_BUILD_PLATFORM=linux-x86_64-bc250
     cmake --build build
 }
 
-package_lichii-bc250() {
-    # Linked: the libraries in the binaries' NEEDED lists. Loaded at run time
-    # (dlopen): the Vulkan loader, and PulseAudio/ALSA through the bundled
-    # cubeb. Boost, OpenSSL, FFmpeg and fmt change their sonames on Arch
-    # updates; CI rebuilds this with every Lichii release.
-    depends=('qt6-base' 'qt6-charts' 'sdl3' 'ffmpeg' 'boost-libs' 'openssl' 'fmt'
-             'libusb' 'enet' 'lz4' 'brotli' 'zlib' 'libxkbcommon' 'libglvnd'
-             'gcc-libs' 'glibc' 'vulkan-icd-loader' 'libpulse' 'alsa-lib'
-             'hicolor-icon-theme' 'lichii-steam-sync')
-    optdepends=('gamemode: Feral GameMode while a game runs')
-    provides=("$_name")
-    conflicts=("$_name" "$_name-git")
+package() {
+    local stage="$srcdir/stage" lib="$pkgdir/usr/lib/$_name" id=io.github.lethevimlet.lichii-bc250
+    rm -rf "$stage"
+    DESTDIR="$stage" cmake --install build
 
-    DESTDIR="$pkgdir" cmake --install build
-    # eden-cli / eden-room are also what the Eden emulator installs.
-    mv "$pkgdir/usr/bin/eden-cli" "$pkgdir/usr/bin/lichii-cli"
-    mv "$pkgdir/usr/bin/eden-room" "$pkgdir/usr/bin/lichii-room"
+    # The real binaries beside libnxformat; /usr/bin gets the launchers.
+    install -d "$lib" "$pkgdir/usr/bin"
+    install -m755 "$stage/usr/bin/lichii" "$lib/lichii-bc250"
+    install -m755 "$stage/usr/bin/eden-cli" "$lib/lichii-bc250-cli"
+    install -m755 "$stage/usr/bin/eden-room" "$pkgdir/usr/bin/lichii-bc250-room"
+    install -m755 "$stage/usr/lib/$_name/"libnxformat.so* "$lib/"
+    install -m644 lichii-bc250-env "$lib/lichii-bc250-env"
+    install -m755 lichii-bc250-wrapper "$pkgdir/usr/bin/lichii-bc250"
+    ln -s lichii-bc250 "$pkgdir/usr/bin/lichii-bc250-cli"
+
+    # Desktop integration under the fork's own id.
+    local share="$stage/usr/share"
+    sed -e "s/^Name=.*/Name=Lichii (BC-250)/" \
+        -e "s/^Icon=.*/Icon=$id/" \
+        -e "s/^TryExec=.*/TryExec=lichii-bc250/" \
+        -e "s/^Exec=lichii /Exec=lichii-bc250 /" \
+        "$share/applications/io.github.zortos293.lichii.desktop" > "$srcdir/$id.desktop"
+    grep -qx 'Exec=lichii-bc250 %f' "$srcdir/$id.desktop"
+    install -Dm644 "$srcdir/$id.desktop" "$pkgdir/usr/share/applications/$id.desktop"
+    install -Dm644 "$share/icons/hicolor/256x256/apps/io.github.zortos293.lichii.png" \
+        "$pkgdir/usr/share/icons/hicolor/256x256/apps/$id.png"
+    install -Dm644 "$share/mime/packages/io.github.zortos293.lichii.xml" \
+        "$pkgdir/usr/share/mime/packages/$id.xml"
+    sed -e "s/io\.github\.zortos293\.lichii/$id/g" "$share/metainfo/io.github.zortos293.lichii.metainfo.xml" \
+        > "$srcdir/$id.metainfo.xml"
+    install -Dm644 "$srcdir/$id.metainfo.xml" "$pkgdir/usr/share/metainfo/$id.metainfo.xml"
+
+    # The fork's Ocarina of Time settings and the variables its launcher adds.
+    local doc="$pkgdir/usr/share/doc/$pkgname"
+    install -d "$doc"
+    sed -n "/^    cat > \"\$APP_DIR\/oot.ini\" <<'INI'\$/,/^INI\$/p" "$_name/tools/bc250/bc250-install.sh" |
+        sed '1d;$d' > "$doc/oot.ini"
+    [[ -s "$doc/oot.ini" ]]
+    install -m644 "$_name/README.md" "$_name/CHANGELOG.md" "$doc/"
+
     install -Dm644 "$_name/LICENSE.txt" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.txt"
     cp -r --no-preserve=ownership "$_name/LICENSES" "$pkgdir/usr/share/licenses/$pkgname/"
-}
-
-package_lichii-steam-sync() {
-    pkgdesc="Add Nintendo Switch 2 games to Steam as Lichii shortcuts, with artwork"
-    arch=('any')
-    license=('GPL-2.0-only')
-    depends=('python' 'python-pillow')
-    optdepends=('lichii-bc250: the emulator the shortcuts start (/usr/bin/lichii)')
-
-    install -Dm755 lichii-steam-sync "$pkgdir/usr/bin/lichii-steam-sync"
 }

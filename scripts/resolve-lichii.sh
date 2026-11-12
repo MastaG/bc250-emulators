@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Resolve which Lichii release lichii-bc250 builds.
+# Resolve which Lichii release the lichii package builds.
 #
 # Upstream's CI tags every successful nx2 build as build-<n> and publishes it
 # as a GitHub release; the newest non-prerelease release is the newest build

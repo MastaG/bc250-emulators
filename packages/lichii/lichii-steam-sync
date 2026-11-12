@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """Add the Switch 2 games in ~/Games/Switch2 to Steam as Lichii shortcuts.
 
-The shortcuts start /usr/bin/lichii (the lichii-bc250 package); --emulator
-points them at another Lichii, for example an AppImage.
+The shortcuts start /usr/bin/lichii-bc250 (the BC-250 fork) when it is
+installed, else /usr/bin/lichii (the lichii package); --emulator picks one
+(lichii, lichii-bc250, or the path of another Lichii, for example an AppImage).
+
+The BC-250's driver offers mesh shaders (DirectMesh) that Lichii's mesh draws,
+Zelda: Ocarina of Time's among them, do not run on yet: shortcuts of lichii get
+EDEN_NX2_FORCE_MESH_FALLBACK=1, so those draws take Lichii's own compute
+fallback instead (lichii-bc250 sets it itself). --native-mesh leaves it out
+(remembered); EDEN_NX2_NO_MESH would skip the draws instead, which loses
+geometry.
 
 What a run does:
   1. Games: every .nup (also .nx/.xci/.nsp) in the folder gets a shortcut
@@ -29,7 +37,8 @@ Steam has to be closed while its shortcut list is written: the script stops it
 (only when something changed and no game is running) and starts it again.
 
 Usage: lichii-steam-sync [--dry-run] [--prune] [--refresh-art] [--migrate]
-                         [--env NAME=VALUE ...] [--clear-env] [--emulator PATH] [dir]
+                         [--env NAME=VALUE ...] [--clear-env] [--native-mesh]
+                         [--emulator lichii|lichii-bc250|PATH] [dir]
 """
 
 import argparse
@@ -51,7 +60,9 @@ import urllib.request
 
 HOME = os.path.expanduser('~')
 DEFAULT_DIR = os.path.join(HOME, 'Games/Switch2')
-DEFAULT_EMULATOR = '/usr/bin/lichii'
+EMULATORS = {'lichii': '/usr/bin/lichii', 'lichii-bc250': '/usr/bin/lichii-bc250'}
+# The variable that sends mesh draws to Lichii's compute fallback (see the docstring).
+MESH_FALLBACK = 'EDEN_NX2_FORCE_MESH_FALLBACK=1'
 GAME_EXTS = ('.nup', '.nx', '.xci', '.nsp')
 LAUNCH_FLAGS = '-f -g'
 TAG = 'Nintendo Switch 2 - Lichii'
@@ -173,6 +184,30 @@ def entry_game(entry):
         if tok.lower().endswith(GAME_EXTS):
             return os.path.abspath(tok)
     return None
+
+
+def pick_emulator(requested):
+    """The emulator the shortcuts start: --emulator (a name of EMULATORS or a path),
+    else lichii-bc250 when it is installed, else lichii."""
+    if requested:
+        return os.path.abspath(os.path.expanduser(EMULATORS.get(requested, requested)))
+    have = [name for name, path in EMULATORS.items() if os.path.exists(path)]
+    if 'lichii-bc250' in have:
+        if 'lichii' in have:
+            print('Note: both lichii and lichii-bc250 installed, choosing lichii-bc250, '
+                  'please use --emulator to change it.')
+        return EMULATORS['lichii-bc250']
+    return EMULATORS['lichii']
+
+
+def shortcut_env(env, emulator, native_mesh):
+    """The environment of the shortcuts: the remembered --env, and for plain lichii
+    the mesh fallback (lichii-bc250's launcher sets that itself)."""
+    names = {e.split('=', 1)[0] for e in env}
+    if (not native_mesh and os.path.basename(emulator) == 'lichii'
+            and MESH_FALLBACK.split('=', 1)[0] not in names):
+        return env + [MESH_FALLBACK]
+    return env
 
 
 def launch_options(game, env):
@@ -438,8 +473,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0],
                                  epilog=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('dir', nargs='?', default=DEFAULT_DIR, help='game folder (default ~/Games/Switch2)')
-    ap.add_argument('--emulator', default=DEFAULT_EMULATOR,
-                    help='the Lichii the shortcuts start (default %s)' % DEFAULT_EMULATOR)
+    ap.add_argument('--emulator', default=None,
+                    help='the Lichii the shortcuts start: lichii, lichii-bc250 or a path '
+                         '(default lichii-bc250 when installed, else lichii)')
+    ap.add_argument('--native-mesh', action=argparse.BooleanOptionalAction, default=None,
+                    help='lichii shortcuts without EDEN_NX2_FORCE_MESH_FALLBACK=1 (remembered)')
     ap.add_argument('--env', action='append', default=None, metavar='NAME=VALUE',
                     help='environment variable for every Lichii shortcut (repeatable, remembered)')
     ap.add_argument('--clear-env', action='store_true', help='drop the remembered environment variables')
@@ -450,7 +488,8 @@ def main():
     ap.add_argument('--dry-run', action='store_true', help='show what would change, change nothing')
     a = ap.parse_args()
     games_dir = os.path.abspath(os.path.expanduser(a.dir))
-    emulator = os.path.abspath(os.path.expanduser(a.emulator))
+    emulator = pick_emulator(a.emulator)
+    print('emulator: %s' % emulator)
     dry = a.dry_run
     if not os.path.isdir(games_dir):
         raise SystemExit('%s does not exist: put the Switch 2 games there, or name the folder' % games_dir)
@@ -474,6 +513,9 @@ def main():
         names = {e.split('=', 1)[0] for e in a.env}
         env = [e for e in env if e.split('=', 1)[0] not in names] + a.env
     settings['env'] = env
+    if a.native_mesh is not None:
+        settings['native_mesh'] = a.native_mesh
+    env = shortcut_env(env, emulator, bool(settings.get('native_mesh')))
     if env:
         print('environment for the shortcuts: %s' % ' '.join(env))
 

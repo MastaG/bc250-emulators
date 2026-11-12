@@ -23,11 +23,16 @@ Then:
 
 ```sh
 sudo pacman -Syu
-sudo pacman -S lichii-bc250          # Switch 2: Lichii
+sudo pacman -S lichii                # Switch 2: Lichii
+sudo pacman -S lichii-bc250          # Switch 2: the BC-250 Lichii fork (can be installed beside lichii)
 sudo pacman -S kytyps5-native-git    # PS5: KytyPS5-Native
 ```
 
-## Lichii (lichii-bc250)
+## Lichii (lichii)
+
+Until 2026-11-12 this package was called `lichii-bc250`; that name is now the BC-250 fork below. An installed
+old `lichii-bc250` is replaced by `lichii` on the next `pacman -Syu` (pacman asks), with the same binaries, so
+Steam shortcuts keep working.
 
 [Lichii](https://github.com/zortos293/lichii), a Switch 2 emulator based on Eden, compiled for the BC-250:
 
@@ -42,7 +47,7 @@ current. The package version is upstream's build number (`build-130` → `130-<p
 
 ### lichii-steam-sync
 
-Installed together with `lichii-bc250`. Adds every game in `~/Games/Switch2` (`.nup`, `.nx`, `.xci`, `.nsp`) to
+Installed together with `lichii` and with `lichii-bc250`. Adds every game in `~/Games/Switch2` (`.nup`, `.nx`, `.xci`, `.nsp`) to
 Steam as a non-Steam shortcut, with the name and artwork from Nintendo's store (or SteamGridDB with an API key).
 
 ```sh
@@ -52,16 +57,48 @@ lichii-steam-sync --env NAME=VALUE     # add a launch variable to every shortcut
 lichii-steam-sync --clear-env          # forget the remembered variables
 lichii-steam-sync --prune              # remove shortcuts of games that are gone, without asking
 lichii-steam-sync --dry-run            # show what would change
+lichii-steam-sync --emulator lichii --migrate        # switch the shortcuts to lichii
+lichii-steam-sync --emulator lichii-bc250 --migrate  # ... or to the BC-250 fork
 ```
+
+The shortcuts start `lichii-bc250` when it is installed, else `lichii`; with both installed the script says so.
+`--emulator` picks one (or the path of another Lichii build); `--migrate` also switches the shortcuts that
+already exist, keeping their artwork, play time and Steam settings.
 
 Steam is closed while the shortcut list is written and started again afterwards.
 
 Tips for the BC-250:
 
-- Games that black-screen in 3D use mesh shaders the BC-250's driver cannot run yet; Lichii's own fallback
-  avoids that: `lichii-steam-sync --env EDEN_NX2_FORCE_MESH_FALLBACK=1`
+- Mesh shaders: this repository's Mesa offers them (DirectMesh), but not yet for the ones Lichii's games use
+  (Ocarina of Time's among them: black screens, missing geometry). So mesh draws go through Lichii's own compute
+  fallback: `lichii` shortcuts get `EDEN_NX2_FORCE_MESH_FALLBACK=1`, and `lichii-bc250` sets it itself (also on
+  the command line). `lichii-steam-sync --native-mesh` leaves it out of `lichii` shortcuts (remembered;
+  `--no-native-mesh` undoes it), `LICHII_BC250_NATIVE_MESH=1` does the same for `lichii-bc250`.
+  (`EDEN_NX2_NO_MESH=1` is a different switch: it skips mesh draws, which loses geometry.)
 - Lichii needs a lot of memory (Ocarina of Time: ~10 GB plus ~6 GB of GPU memory): use enough swap on a fast SSD,
   not on a USB stick.
+
+## Lichii BC-250 fork (lichii-bc250)
+
+[lichii-bc250](https://github.com/lethevimlet/lichii-bc250) is a fork of Lichii tuned for the BC-250 itself (RADV
+query and semaphore fixes, the task/mesh shader fallback Zelda: Ocarina of Time needs, less memory use on 16 GB of
+shared RAM, frame pacing). It has no releases: the package is built from the newest commit of its `main` branch,
+with the same flags as `lichii` (`-march=znver2`, no RDSEED/XSAVES, PGO with the fork's own profile, ThinLTO).
+
+- `lichii-bc250` (the Qt emulator), `lichii-bc250-cli` (upstream's `eden-cli`) and `lichii-bc250-room`; nothing
+  clashes with `lichii`, so both can be installed. Both use the same Eden folders (`~/.config/eden`,
+  `~/.local/share/eden`, `~/.cache/eden`).
+- `lichii-bc250` and `lichii-bc250-cli` set the fork's BC-250 tuning variables first (texture cache caps, split GPU
+  thread, frames ahead, shader workers: `/usr/lib/lichii-bc250/lichii-bc250-env`). A variable you set yourself
+  wins. The fork's launcher also sets `EDEN_NX2_VSYNC_HZ=30 EDEN_NX2_SWAP_INTERVAL=2 EDEN_VI2_MAX_RESOLUTION_MODE=1`,
+  which are for Ocarina of Time only; add them to that game's launch options.
+- The fork's Ocarina of Time settings are in `/usr/share/doc/lichii-bc250/oot.ini`:
+  `lichii-bc250-cli -f -c /usr/share/doc/lichii-bc250/oot.ini -g <game>` (copy it first to change it).
+- Mesh draws go through Lichii's compute fallback (`EDEN_NX2_FORCE_MESH_FALLBACK=1`, see "Tips for the
+  BC-250"); `LICHII_BC250_NATIVE_MESH=1` tries DirectMesh's mesh shaders instead.
+- Steam shortcuts: `lichii-steam-sync` (installed with it) uses `lichii-bc250` when it is installed.
+- The system tuning in the fork's README (swappiness, compaction, swapfile, UMA, TTM limit) is not done by the
+  package.
 
 ## KytyPS5-Native (kytyps5-native-git)
 
@@ -276,7 +313,8 @@ other options.
 ## Building locally
 
 ```sh
-./scripts/build-lichii-bc250-package.sh          # resolve the newest upstream release themselves
+./scripts/build-lichii-package.sh                # these resolve the newest upstream release/commit themselves
+./scripts/build-lichii-bc250-package.sh
 ./scripts/build-kytyps5-native-git-package.sh
 python3 -m unittest discover tests               # packaging tests
 ```

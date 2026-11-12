@@ -17,7 +17,7 @@ hash_files() {
 }
 
 case "$COMPONENT" in
-    lichii-bc250)
+    lichii)
         # Upstream publishes several builds a day; this rebuilds at most once
         # per CI run, with whichever release is newest then.
         if [[ -z "${LICHII_COMMIT:-}" ]]; then
@@ -29,10 +29,27 @@ case "$COMPONENT" in
         }
         {
             printf 'lichii-commit  %s\n' "$LICHII_COMMIT"
-            hash_files "$ROOT_DIR"/packages/lichii-bc250/PKGBUILD.in \
-                "$ROOT_DIR"/packages/lichii-bc250/lichii-steam-sync \
-                "$ROOT_DIR"/scripts/build-lichii-bc250-package.sh \
+            hash_files "$ROOT_DIR"/packages/lichii/PKGBUILD.in \
+                "$ROOT_DIR"/packages/lichii/lichii-steam-sync \
+                "$ROOT_DIR"/scripts/build-lichii-package.sh \
                 "$ROOT_DIR"/scripts/resolve-lichii.sh
+        } | sha256sum | awk '{print $1}'
+        ;;
+    lichii-bc250)
+        # The fork's main branch: a rebuild for every push there.
+        if [[ -z "${LICHII_BC250_COMMIT:-}" ]]; then
+            eval "$("$ROOT_DIR/scripts/resolve-lichii-bc250.sh")"
+        fi
+        [[ "$LICHII_BC250_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'ERROR: invalid LICHII_BC250_COMMIT: %s\n' "$LICHII_BC250_COMMIT" >&2
+            exit 1
+        }
+        pkg_dir="$ROOT_DIR/packages/lichii-bc250"
+        {
+            printf 'lichii-bc250-commit  %s\n' "$LICHII_BC250_COMMIT"
+            hash_files "$pkg_dir"/PKGBUILD.in "$pkg_dir"/lichii-bc250-env "$pkg_dir"/lichii-bc250-wrapper \
+                "$ROOT_DIR"/scripts/build-lichii-bc250-package.sh \
+                "$ROOT_DIR"/scripts/resolve-lichii-bc250.sh
         } | sha256sum | awk '{print $1}'
         ;;
     kytyps5-native-git)

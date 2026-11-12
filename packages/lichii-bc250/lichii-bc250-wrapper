@@ -1,0 +1,5 @@
+#!/bin/bash
+# /usr/bin/lichii-bc250 and (as a link) /usr/bin/lichii-bc250-cli: the fork's
+# BC-250 tuning, then the real binary of the same name in /usr/lib/lichii-bc250.
+source /usr/lib/lichii-bc250/lichii-bc250-env
+exec "/usr/lib/lichii-bc250/${0##*/}" "$@"
