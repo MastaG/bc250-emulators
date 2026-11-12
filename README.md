@@ -104,9 +104,12 @@ with the same flags as `lichii` (`-march=znver2`, no RDSEED/XSAVES, PGO with the
 
 `kytyps5-native-git` packages [KytyPS5-Native](https://github.com/superkeka/KytyPS5-Native):
 PS5 games, with their GPU work running natively on the BC-250's PS5 APU (gfx1013).
-The repository builds it from the commit of upstream's newest release (upstream
-publishes a release for every push whose build and tests passed) and rebuilds it
-whenever that moves, so updates arrive most days. Only use game files you obtained
+Since 2026-11-12 it is built from
+[KytyPS5-Native-beta](https://github.com/dmorazasanchez/KytyPS5-Native-beta), the
+BC-250 beta fork of it: the commit of the fork's newest release (a beta, such as
+`2026.11.11-beta4`), rebuilt whenever that moves. Only the emulator itself is
+built, as before; the fork's AppImage extras (its own launcher, bundled runtimes,
+`--prepare-system`) are not part of the package. Only use game files you obtained
 legally.
 
 ```bash
