@@ -51,7 +51,7 @@ package="${packages[0]}"
 pkginfo="$(bsdtar -xOf "$package" .PKGINFO)"
 version="$(awk -F ' = ' '$1 == "pkgver" { print $2; exit }' <<<"$pkginfo")"
 short="${LICHII_BC250_COMMIT:0:9}"
-[[ "$version" =~ ^1:r[0-9]+\.g${short}-${PKGREL}$ ]] || {
+[[ "$version" =~ ^[0-9]{8}\.r[0-9]+\.g${short}-${PKGREL}$ ]] || {
     printf 'ERROR: unexpected lichii-bc250 version %s for commit %s\n' "$version" "$LICHII_BC250_COMMIT" >&2
     exit 1
 }
@@ -100,13 +100,14 @@ makepkg --printsrcinfo > .SRCINFO
 
 # out/repo holds what the release published so far (the workflow seeds it):
 # replace the previous fork package with this build's. Only pkgname
-# lichii-bc250 at epoch 1: the epoch-0 lichii-bc250 builds are the old name of
-# packages/lichii, and its build script retires them.
+# lichii-bc250 with a dated version: the ones versioned by a bare build number
+# (150 ...) are the old name of packages/lichii, and its build script retires
+# them. (The first fork builds had epoch 1, 1:r<count>...; they go too.)
 mkdir -p -- "$OUT_DIR"
 for old in "$OUT_DIR"/*.pkg.tar.zst; do
     info="$(bsdtar -xOf "$old" .PKGINFO 2>/dev/null)" || continue
     [[ "$(awk -F ' = ' '$1 == "pkgname" { print $2; exit }' <<<"$info")" == lichii-bc250 &&
-       "$(awk -F ' = ' '$1 == "pkgver" { print $2; exit }' <<<"$info")" == 1:* ]] || continue
+       ! "$(awk -F ' = ' '$1 == "pkgver" { print $2; exit }' <<<"$info")" =~ ^[0-9]+- ]] || continue
     printf '==> Removing previous package: %s\n' "$(basename -- "$old")"
     rm -f -- "$old"
 done

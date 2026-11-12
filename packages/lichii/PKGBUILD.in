@@ -16,9 +16,10 @@
 #   depends on it, so it is always installed with the emulator.
 #
 # Until 2026-11-12 this package was called lichii-bc250. That name now belongs
-# to the BC-250 fork of Lichii (packages/lichii-bc250, epoch 1), so the
-# versioned replaces below moves only the old, epoch-0 lichii-bc250 builds over
-# to this package and leaves an installed fork alone.
+# to the BC-250 fork of Lichii (packages/lichii-bc250). The old builds are
+# versioned by upstream's build number (e.g. 150), the fork by commit date
+# (e.g. 20261112.r30626.g83071fda4), so the versioned replaces below moves only
+# the old builds over to this package and leaves an installed fork alone.
 #
 # Differences from upstream's linux-x86_64-pgo release:
 # - CPU target -march=znver2 -mtune=znver2 (upstream: generic x86-64), minus
@@ -110,7 +111,7 @@ package_lichii() {
              'hicolor-icon-theme' 'lichii-steam-sync')
     optdepends=('gamemode: Feral GameMode while a game runs')
     conflicts=("$_name-git")
-    replaces=('lichii-bc250<1:0')
+    replaces=('lichii-bc250<1000000')
 
     DESTDIR="$pkgdir" cmake --install build
     # eden-cli / eden-room are also what the Eden emulator installs.

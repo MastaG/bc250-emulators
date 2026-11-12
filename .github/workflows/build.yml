@@ -32,12 +32,24 @@ env:
   RELEASE_TAG: repo
 
 jobs:
-  build:
+  # What to build: the upstream commits and which components changed.
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    outputs:
+      components: ${{ steps.decide.outputs.components }}
+      matrix: ${{ steps.decide.outputs.matrix }}
+      lichii_tag: ${{ steps.resolve.outputs.lichii_tag }}
+      lichii_build: ${{ steps.resolve.outputs.lichii_build }}
+      lichii_commit: ${{ steps.resolve.outputs.lichii_commit }}
+      lichii_bc250_commit: ${{ steps.resolve.outputs.lichii_bc250_commit }}
+      kyty_tag: ${{ steps.resolve.outputs.kyty_tag }}
+      kyty_commit: ${{ steps.resolve.outputs.kyty_commit }}
+      lichii_fingerprint: ${{ steps.decide.outputs.lichii_fingerprint }}
+      lichii_bc250_fingerprint: ${{ steps.decide.outputs.lichii_bc250_fingerprint }}
+      kytyps5_native_git_fingerprint: ${{ steps.decide.outputs.kytyps5_native_git_fingerprint }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Resolve upstream releases
         id: resolve
@@ -95,10 +107,27 @@ jobs:
           kytyps5-native-git KYTYPS5_NATIVE_GIT_FINGERPRINT
           EOF
           echo "components=${components[*]}" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -cn '$ARGS.positional' --args "${components[@]}")" >> "$GITHUB_OUTPUT"
           echo "Build: ${components[*]:-nothing}"
 
+  # One job per component, side by side: each starts from the published
+  # repository, lets its build script replace that component's files, and
+  # passes on only what changed (new or changed files, plus the names it
+  # removed) for the publish job to merge.
+  build:
+    needs: plan
+    if: needs.plan.outputs.components != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        component: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
       - name: Free disk space
-        if: steps.decide.outputs.components != ''
         run: |
           # The hosted runner's preinstalled SDKs leave too little room for the
           # LTO builds and their bundled dependencies.
@@ -107,7 +136,6 @@ jobs:
           df -h /
 
       - name: Seed the published repository
-        if: steps.decide.outputs.components != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -120,37 +148,134 @@ jobs:
             gh release download "$RELEASE_TAG" -D out/repo || true
           fi
           ls -la out/repo
+          # What the release had, to tell this build's changes apart.
+          (cd out/repo && find . -maxdepth 1 -type f -printf '%f\0' | xargs -0r sha256sum --) > "$RUNNER_TEMP/before.sha256"
 
       - name: Build
-        id: build
-        if: steps.decide.outputs.components != ''
         env:
-          COMPONENTS: ${{ steps.decide.outputs.components }}
-          LICHII_TAG: ${{ steps.resolve.outputs.lichii_tag }}
-          LICHII_BUILD: ${{ steps.resolve.outputs.lichii_build }}
-          LICHII_COMMIT: ${{ steps.resolve.outputs.lichii_commit }}
-          LICHII_FINGERPRINT: ${{ steps.decide.outputs.lichii_fingerprint }}
-          LICHII_BC250_COMMIT: ${{ steps.resolve.outputs.lichii_bc250_commit }}
-          LICHII_BC250_FINGERPRINT: ${{ steps.decide.outputs.lichii_bc250_fingerprint }}
-          KYTY_TAG: ${{ steps.resolve.outputs.kyty_tag }}
-          KYTY_COMMIT: ${{ steps.resolve.outputs.kyty_commit }}
-          KYTYPS5_NATIVE_GIT_FINGERPRINT: ${{ steps.decide.outputs.kytyps5_native_git_fingerprint }}
+          COMPONENT: ${{ matrix.component }}
+          LICHII_TAG: ${{ needs.plan.outputs.lichii_tag }}
+          LICHII_BUILD: ${{ needs.plan.outputs.lichii_build }}
+          LICHII_COMMIT: ${{ needs.plan.outputs.lichii_commit }}
+          LICHII_FINGERPRINT: ${{ needs.plan.outputs.lichii_fingerprint }}
+          LICHII_BC250_COMMIT: ${{ needs.plan.outputs.lichii_bc250_commit }}
+          LICHII_BC250_FINGERPRINT: ${{ needs.plan.outputs.lichii_bc250_fingerprint }}
+          KYTY_TAG: ${{ needs.plan.outputs.kyty_tag }}
+          KYTY_COMMIT: ${{ needs.plan.outputs.kyty_commit }}
+          KYTYPS5_NATIVE_GIT_FINGERPRINT: ${{ needs.plan.outputs.kytyps5_native_git_fingerprint }}
           PKGREL: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          # shellcheck disable=SC2086
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/workspace" -w /workspace \
             -e REPO_NAME -e PKGREL \
             -e LICHII_TAG -e LICHII_BUILD -e LICHII_COMMIT -e LICHII_FINGERPRINT \
             -e LICHII_BC250_COMMIT -e LICHII_BC250_FINGERPRINT \
             -e KYTY_TAG -e KYTY_COMMIT -e KYTYPS5_NATIVE_GIT_FINGERPRINT \
-            archlinux:base-devel bash /workspace/scripts/ci-build.sh $COMPONENTS
+            archlinux:base-devel bash /workspace/scripts/ci-build.sh --no-database "$COMPONENT"
+
+      - name: Collect the changes
+        # A failed build changed nothing (the scripts touch out/repo only at
+        # the end), so this is empty then and the publish job keeps the old
+        # packages of this component.
+        if: always()
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          set -euo pipefail
+          declare -A before=()
+          while read -r sum name; do before["$name"]="$sum"; done < "$RUNNER_TEMP/before.sha256"
+          changes="$RUNNER_TEMP/changes"
+          mkdir -p "$changes/files"
+          : > "$changes/removed.txt"
+          cd out/repo
+          for file in *; do
+            [[ -f "$file" ]] || continue
+            sum="$(sha256sum -- "$file" | cut -d' ' -f1)"
+            [[ "${before[$file]:-}" == "$sum" ]] && continue
+            echo "changed: $file"
+            cp -- "$file" "$changes/files/"
+          done
+          for name in "${!before[@]}"; do
+            [[ -e "$name" ]] && continue
+            echo "removed: $name"
+            printf '%s\n' "$name" >> "$changes/removed.txt"
+          done
+          # One tarball: artifact uploads refuse some characters in file names.
+          tar -C "$changes" -cf "$RUNNER_TEMP/changes-$COMPONENT.tar" .
+
+      - name: Upload the changes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: changes-${{ matrix.component }}
+          path: ${{ runner.temp }}/changes-${{ matrix.component }}.tar
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # Merges every build's changes into the published repository, rewrites the
+  # database and uploads. Also after a partly failed build: what did build is
+  # published, a failed component keeps its previous packages.
+  publish:
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.components != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Seed the published repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p out/repo
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release download "$RELEASE_TAG" -D out/repo || true
+          fi
+
+      - name: Download the changes
+        uses: actions/download-artifact@v8
+        with:
+          pattern: changes-*
+          path: ${{ runner.temp }}/changes
+
+      - name: Merge the changes
+        id: merge
+        run: |
+          set -euo pipefail
+          any=false
+          shopt -s nullglob
+          for tarball in "$RUNNER_TEMP"/changes/*/changes-*.tar; do
+            dir="$(mktemp -d)"
+            tar -C "$dir" -xf "$tarball"
+            echo "== $(basename -- "$tarball" .tar)"
+            while IFS= read -r name; do
+              [[ -n "$name" && "$name" != */* ]] || continue
+              echo "remove: $name"
+              rm -f -- "out/repo/$name"
+              any=true
+            done < "$dir/removed.txt"
+            for file in "$dir"/files/*; do
+              echo "add: $(basename -- "$file")"
+              cp -- "$file" out/repo/
+              any=true
+            done
+          done
+          echo "any=$any" >> "$GITHUB_OUTPUT"
+
+      - name: Write the database
+        if: steps.merge.outputs.any == 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" -w /workspace \
+            -e REPO_NAME \
+            archlinux:base-devel bash /workspace/scripts/ci-build.sh --database-only
 
       - name: Publish
-        # Also after a partly failed build: ci-build.sh still wrote a database
-        # of everything that did build.
-        if: always() && steps.decide.outputs.components != '' && hashFiles('out/repo/bc250-emulators.db') != ''
+        if: steps.merge.outputs.any == 'true' && hashFiles('out/repo/bc250-emulators.db') != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

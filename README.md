@@ -84,6 +84,7 @@ Tips for the BC-250:
 query and semaphore fixes, the task/mesh shader fallback Zelda: Ocarina of Time needs, less memory use on 16 GB of
 shared RAM, frame pacing). It has no releases: the package is built from the newest commit of its `main` branch,
 with the same flags as `lichii` (`-march=znver2`, no RDSEED/XSAVES, PGO with the fork's own profile, ThinLTO).
+The version is the commit date, commit count and hash (`20261112.r30626.g83071fda4-<pkgrel>`).
 
 - `lichii-bc250` (the Qt emulator), `lichii-bc250-cli` (upstream's `eden-cli`) and `lichii-bc250-room`; nothing
   clashes with `lichii`, so both can be installed. Both use the same Eden folders (`~/.config/eden`,
@@ -323,3 +324,6 @@ python3 -m unittest discover tests               # packaging tests
 ```
 
 The packages land in `out/repo/`.
+
+CI builds each package in its own job, side by side; a last job merges what they built into the release and
+rewrites the database (`scripts/ci-build.sh --no-database` / `--database-only`).

@@ -31,12 +31,14 @@
 # same Eden folders (~/.config/eden, ~/.local/share/eden, ~/.cache/eden), as
 # the fork's README says.
 #
-# epoch=1: the name lichii-bc250 belonged to the plain Lichii build (now
-# packages/lichii, which replaces 'lichii-bc250<1:0') until 2026-11-12.
+# The name lichii-bc250 belonged to the plain Lichii build (now packages/lichii,
+# which replaces 'lichii-bc250<1000000') until 2026-11-12. Those were versioned
+# by upstream's build number (150 and so on); the commit date that starts this
+# package's version is far above that, so no epoch is needed (an epoch puts a
+# ':' in the file name, which GitHub release assets turn into a '.').
 pkgname=lichii-bc250
 _name=lichii-bc250
 _commit=@LICHII_BC250_COMMIT@
-epoch=1
 pkgver=0
 pkgrel=@PKGREL@
 pkgdesc="Nintendo Switch 2 emulator (lethevimlet's Lichii fork, tuned for the BC-250), with PGO and ThinLTO"
@@ -62,8 +64,11 @@ sha256sums=('SKIP'
 
 pkgver() {
     cd "$_name"
-    # No releases or tags: the commit count rises with every push to main.
-    printf 'r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
+    # No releases or tags: commit date, then the commit count, which rises with
+    # every push to main (the date keeps the version rising even if it ever
+    # does not).
+    printf '%s.r%s.g%s' "$(git log -1 --format=%cd --date=format:%Y%m%d)" \
+        "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
 }
 
 prepare() {

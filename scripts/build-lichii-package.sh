@@ -104,14 +104,15 @@ makepkg --printsrcinfo > .SRCINFO
 
 # out/repo holds what the release published so far (the workflow seeds it):
 # replace the previous lichii split packages with this build's. Until
-# 2026-11-12 they were built as pkgbase lichii-bc250 (epoch 0); those go too.
-# The BC-250 fork, also lichii-bc250 but epoch 1, is not this script's.
+# 2026-11-12 they were built as pkgbase lichii-bc250, versioned by the bare
+# build number (150-2); those go too. The BC-250 fork, also lichii-bc250 but
+# versioned by date, is not this script's.
 mkdir -p -- "$OUT_DIR"
 for old in "$OUT_DIR"/*.pkg.tar.zst; do
     info="$(bsdtar -xOf "$old" .PKGINFO 2>/dev/null)" || continue
     base="$(awk -F ' = ' '$1 == "pkgbase" { print $2; exit }' <<<"$info")"
     version="$(awk -F ' = ' '$1 == "pkgver" { print $2; exit }' <<<"$info")"
-    [[ "$base" == lichii || ( "$base" == lichii-bc250 && "$version" != *:* ) ]] || continue
+    [[ "$base" == lichii || ( "$base" == lichii-bc250 && "$version" =~ ^[0-9]+- ) ]] || continue
     printf '==> Removing previous package: %s\n' "$(basename -- "$old")"
     rm -f -- "$old"
 done

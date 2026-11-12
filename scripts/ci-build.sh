@@ -5,16 +5,35 @@
 # database from every package in out/repo -- the ones the release already had
 # (seeded by the workflow) plus this run's.
 #
-#   ci-build.sh <component>...
+#   ci-build.sh [--no-database] <component>...
+#   ci-build.sh --database-only
 #
 # One component failing does not stop the others: what did build still goes
 # into the database (a failed component keeps its previous packages), and the
 # script exits non-zero at the end so the run shows the failure.
+#
+# The workflow builds each component in its own job (--no-database), then its
+# publish job merges what they changed into out/repo and writes the database
+# (--database-only).
 set -Eeuo pipefail
 
-(( $# )) || { printf 'ERROR: no component given\n' >&2; exit 1; }
+database=true
+components=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-database) database=false ;;
+        --database-only) database=only ;;
+        -*) printf 'ERROR: unknown option: %s\n' "$arg" >&2; exit 1 ;;
+        *) components+=("$arg") ;;
+    esac
+done
+if [[ "$database" == only ]]; then
+    (( ${#components[@]} == 0 )) || { printf 'ERROR: --database-only takes no component\n' >&2; exit 1; }
+else
+    (( ${#components[@]} )) || { printf 'ERROR: no component given\n' >&2; exit 1; }
+    : "${PKGREL:?PKGREL is required}"
+fi
 REPO_NAME="${REPO_NAME:-bc250-emulators}"
-: "${PKGREL:?PKGREL is required}"
 
 # A local signing key first, so archlinux-keyring's post-install can sign the
 # keys it imports instead of logging an error that looks like a failure.
@@ -31,7 +50,7 @@ chown -R builder:builder /workspace
 as_builder() { runuser -u builder -- env HOME=/home/builder "$@"; }
 
 failed=()
-for component in "$@"; do
+for component in "${components[@]}"; do
     printf '::group::build %s\n' "$component"
     case "$component" in
         lichii)
@@ -62,6 +81,15 @@ for component in "$@"; do
     esac
     printf '::endgroup::\n'
 done
+
+if [[ "$database" == false ]]; then
+    chown -R builder:builder /workspace/out
+    if (( ${#failed[@]} )); then
+        printf '::error title=Build failed::%s\n' "${failed[*]}"
+        exit 1
+    fi
+    exit 0
+fi
 
 # The database, rebuilt from scratch. GitHub release assets cannot be symlinks,
 # so the .db/.files names repo-add links are replaced by real copies.
