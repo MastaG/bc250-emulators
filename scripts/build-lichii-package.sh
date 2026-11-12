@@ -69,13 +69,25 @@ done
 
 # What a user runs must be there; upstream's eden-* names and the updater must not.
 listing="$(bsdtar -tf "$emulator")"
-for path in usr/bin/lichii usr/bin/lichii-cli usr/bin/lichii-room usr/lib/lichii/libnxformat.so \
+for path in usr/bin/lichii usr/bin/lichii-cli usr/bin/lichii-room \
             usr/share/applications/io.github.zortos293.lichii.desktop; do
     grep -qx -- "$path" <<<"$listing" || {
         printf 'ERROR: lichii is missing %s\n' "$path" >&2
         exit 1
     }
 done
+# Upstream links nxformat statically since build-160 (#1232): nothing may
+# still ask for the shared library, which no package ships any more.
+tmp="$(mktemp -d)"
+bsdtar -xf "$emulator" -C "$tmp" usr/bin/lichii usr/bin/lichii-cli usr/bin/lichii-room
+for binary in "$tmp"/usr/bin/lichii*; do
+    if readelf -d "$binary" | grep -q 'NEEDED.*libnxformat'; then
+        rm -rf -- "$tmp"
+        printf 'ERROR: %s needs libnxformat.so, which lichii does not ship\n' "${binary##*/}" >&2
+        exit 1
+    fi
+done
+rm -rf -- "$tmp"
 if grep -E '^usr/bin/eden' <<<"$listing"; then
     printf 'ERROR: lichii ships eden-* binaries (above); they clash with the Eden emulator\n' >&2
     exit 1

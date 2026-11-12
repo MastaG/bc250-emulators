@@ -36,7 +36,13 @@ fi
 
 cd -- "$BUILD_DIR"
 export MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}"
-makepkg --syncdeps --noconfirm --cleanbuild --clean --skippgpcheck
+# Two steps: pkgver() resets pkgrel to 1 whenever the version changes. Fetch
+# and resolve the version first, put the run's pkgrel back, then build: the
+# second pkgver() finds the same version and keeps it, so a packaging-only
+# rebuild of the same commit is still an update.
+makepkg --syncdeps --noconfirm --nobuild --cleanbuild --skippgpcheck
+sed -i "s/^pkgrel=.*/pkgrel=${PKGREL}/" PKGBUILD
+makepkg --syncdeps --noconfirm --noextract --clean --skippgpcheck
 
 shopt -s nullglob
 packages=("$BUILD_DIR"/*.pkg.tar.zst)
@@ -49,7 +55,7 @@ pkginfo="$(bsdtar -xOf "${packages[0]}" .PKGINFO)"
 pkgver_full="$(awk -F ' = ' '$1 == "pkgver" { print $2; exit }' <<<"$pkginfo")"
 pkgver="${pkgver_full%-*}"
 pkgrel="${pkgver_full##*-}"
-[[ "$pkgver" =~ ^[0-9]{8}\.r[0-9]+\.g[0-9a-f]{7}$ && "$pkgver" == *".g${KYTY_COMMIT:0:7}" ]] || {
+[[ "$pkgver" =~ ^[0-9]{8}\.r[0-9]+\.g[0-9a-f]{7}$ && "$pkgver" == *".g${KYTY_COMMIT:0:7}" && "$pkgrel" == "$PKGREL" ]] || {
     printf 'ERROR: unexpected kytyps5-native-git version %s for commit %s\n' "$pkgver_full" "$KYTY_COMMIT" >&2
     exit 1
 }

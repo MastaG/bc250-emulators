@@ -39,7 +39,12 @@ export MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}"
 mapfile -t deps < <(bash -c 'source ./PKGBUILD; printf "%s\n" "${depends[@]}" "${makedepends[@]}"' |
     grep -vx 'lichii-steam-sync')
 sudo pacman -S --needed --noconfirm "${deps[@]}"
-makepkg --nodeps --noconfirm --cleanbuild --clean --skippgpcheck
+# Two steps: pkgver() resets pkgrel to 1 whenever the version changes, which is
+# every time here. Fetch and resolve the version first, put the run's pkgrel
+# back, then build: the second pkgver() finds the same version and keeps it.
+makepkg --nodeps --noconfirm --nobuild --cleanbuild --skippgpcheck
+sed -i "s/^pkgrel=.*/pkgrel=${PKGREL}/" PKGBUILD
+makepkg --nodeps --noconfirm --noextract --clean --skippgpcheck
 
 shopt -s nullglob
 packages=("$BUILD_DIR"/*.pkg.tar.zst)
@@ -61,7 +66,7 @@ short="${LICHII_BC250_COMMIT:0:9}"
 listing="$(bsdtar -tf "$package")"
 for path in usr/bin/lichii-bc250 usr/bin/lichii-bc250-cli usr/bin/lichii-bc250-room \
             usr/lib/lichii-bc250/lichii-bc250 usr/lib/lichii-bc250/lichii-bc250-cli \
-            usr/lib/lichii-bc250/lichii-bc250-env usr/lib/lichii-bc250/libnxformat.so \
+            usr/lib/lichii-bc250/lichii-bc250-env \
             usr/share/applications/io.github.lethevimlet.lichii-bc250.desktop \
             usr/share/doc/lichii-bc250/oot.ini; do
     grep -qx -- "$path" <<<"$listing" || {
@@ -79,8 +84,11 @@ grep -qx 'depend = lichii-steam-sync' <<<"$pkginfo" || {
 }
 tmp="$(mktemp -d)"
 bsdtar -xf "$package" -C "$tmp" usr/lib/lichii-bc250 usr/bin/lichii-bc250-room
-# The Qt binary finds libnxformat in its own folder, not in /usr/lib/lichii.
-if ! readelf -d "$tmp/usr/lib/lichii-bc250/lichii-bc250" | grep -qE 'R(UN)?PATH.*\[\$ORIGIN\]'; then
+# While libnxformat is a shared library, the Qt binary finds it in its own
+# folder, not in /usr/lib/lichii.
+if grep -q 'NEEDED.*libnxformat' < <(readelf -d "$tmp/usr/lib/lichii-bc250/lichii-bc250") && {
+       [[ ! -e "$tmp/usr/lib/lichii-bc250/libnxformat.so" ]] ||
+       ! readelf -d "$tmp/usr/lib/lichii-bc250/lichii-bc250" | grep -qE 'R(UN)?PATH.*\[\$ORIGIN\]'; }; then
     readelf -d "$tmp/usr/lib/lichii-bc250/lichii-bc250" | grep -E 'RPATH|RUNPATH' >&2 || true
     rm -rf -- "$tmp"
     printf 'ERROR: lichii-bc250 does not look for libnxformat beside itself\n' >&2

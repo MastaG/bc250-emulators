@@ -73,12 +73,14 @@ pkgver() {
 
 prepare() {
     cd "$_name"
-    # libnxformat goes to the fork's own folder, so it does not clash with
-    # packages/lichii's /usr/lib/lichii/libnxformat.so. The binaries move
-    # there too (package()), so the run path is the folder itself.
+    # While the fork still links libnxformat as a shared library, it goes to
+    # the fork's own folder, so it never clashes with an old /usr/lib/lichii.
+    # The binaries move there too (package()), so the run path is the folder
+    # itself. Upstream links it statically since #1232 (build-160); once the
+    # fork has that too there is nothing to move.
     local cm=src/yuzu/CMakeLists.txt
+    grep -qF 'DESTINATION "${CMAKE_INSTALL_LIBDIR}/lichii")' "$cm" || return 0
     grep -qF 'INSTALL_RPATH "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/lichii")' "$cm"
-    grep -qF 'DESTINATION "${CMAKE_INSTALL_LIBDIR}/lichii")' "$cm"
     sed -i -e 's|INSTALL_RPATH "\\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/lichii")|INSTALL_RPATH "\\$ORIGIN")|' \
         -e 's|DESTINATION "${CMAKE_INSTALL_LIBDIR}/lichii")|DESTINATION "${CMAKE_INSTALL_LIBDIR}/lichii-bc250")|' "$cm"
     grep -qF 'INSTALL_RPATH "\$ORIGIN")' "$cm"
@@ -124,12 +126,15 @@ package() {
     rm -rf "$stage"
     DESTDIR="$stage" cmake --install build
 
-    # The real binaries beside libnxformat; /usr/bin gets the launchers.
+    # The real binaries (beside libnxformat while it is shared); /usr/bin gets
+    # the launchers.
     install -d "$lib" "$pkgdir/usr/bin"
     install -m755 "$stage/usr/bin/lichii" "$lib/lichii-bc250"
     install -m755 "$stage/usr/bin/eden-cli" "$lib/lichii-bc250-cli"
     install -m755 "$stage/usr/bin/eden-room" "$pkgdir/usr/bin/lichii-bc250-room"
-    install -m755 "$stage/usr/lib/$_name/"libnxformat.so* "$lib/"
+    if compgen -G "$stage/usr/lib/$_name/libnxformat.so*" >/dev/null; then
+        install -m755 "$stage/usr/lib/$_name/"libnxformat.so* "$lib/"
+    fi
     install -m644 lichii-bc250-env "$lib/lichii-bc250-env"
     install -m755 lichii-bc250-wrapper "$pkgdir/usr/bin/lichii-bc250"
     ln -s lichii-bc250 "$pkgdir/usr/bin/lichii-bc250-cli"
