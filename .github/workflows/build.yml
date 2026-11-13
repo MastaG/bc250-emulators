@@ -247,16 +247,25 @@ jobs:
           set -euo pipefail
           any=false
           shopt -s nullglob
+          dirs=()
           for tarball in "$RUNNER_TEMP"/changes/*/changes-*.tar; do
             dir="$(mktemp -d)"
             tar -C "$dir" -xf "$tarball"
-            echo "== $(basename -- "$tarball" .tar)"
+            dirs+=("$dir")
+          done
+          # Every removal before any addition: one build may retire a file
+          # name another build writes anew (lichii drops the old-name
+          # lichii-bc250 sidecars the fork's build replaces), and what a
+          # build wrote must win, whatever order the jobs come in.
+          for dir in "${dirs[@]}"; do
             while IFS= read -r name; do
               [[ -n "$name" && "$name" != */* ]] || continue
               echo "remove: $name"
               rm -f -- "out/repo/$name"
               any=true
             done < "$dir/removed.txt"
+          done
+          for dir in "${dirs[@]}"; do
             for file in "$dir"/files/*; do
               echo "add: $(basename -- "$file")"
               cp -- "$file" out/repo/
