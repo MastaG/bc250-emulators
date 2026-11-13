@@ -67,6 +67,7 @@ case "$COMPONENT" in
             hash_files "$pkg_dir"/PKGBUILD.in "$pkg_dir"/kyty-lodhw.service \
                 "$pkg_dir"/kytyps5-native-git.install "$pkg_dir"/kytyps5-native-wrapper.sh \
                 "$pkg_dir"/kytyps5-native.desktop "$pkg_dir"/kytyps5-steam-sync \
+                "$pkg_dir"/kytyps5-run-addcont.patch \
                 "$ROOT_DIR"/scripts/build-kytyps5-native-git-package.sh \
                 "$ROOT_DIR"/scripts/resolve-kytyps5-native.sh
         } | sha256sum | awk '{print $1}'

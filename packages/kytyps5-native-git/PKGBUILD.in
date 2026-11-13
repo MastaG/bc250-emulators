@@ -53,8 +53,10 @@ source=("$_name::git+https://github.com/dmorazasanchez/KytyPS5-Native-beta.git#c
         'kytyps5-native-wrapper.sh'
         'kytyps5-native.desktop'
         'kyty-lodhw.service'
-        'kytyps5-steam-sync')
+        'kytyps5-steam-sync'
+        'kytyps5-run-addcont.patch')
 sha256sums=('SKIP'
+            'SKIP'
             'SKIP'
             'SKIP'
             'SKIP'
@@ -71,6 +73,10 @@ pkgver() {
 prepare() {
     cd "$_name"
     git submodule update --init --recursive --depth 1
+    # The add-ons file (upstream 9c0c819), until the fork's runner has it.
+    if ! grep -q addcont tools/kytyps5-native/kytyps5-run.sh; then
+        git apply "$srcdir/kytyps5-run-addcont.patch"
+    fi
 }
 
 build() {
