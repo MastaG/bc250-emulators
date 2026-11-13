@@ -25,7 +25,9 @@ class WiringTests(unittest.TestCase):
         text = (ROOT / "scripts/ci-build.sh").read_text()
         self.assertIn('build-kytyps5-native-git-package.sh || failed+=("$component")', text)
         workflow = (ROOT / ".github/workflows/build.yml").read_text()
-        self.assertIn("if: always() && steps.decide.outputs.components != ''", workflow)
+        self.assertIn("fail-fast: false", workflow)
+        self.assertIn("if: always() && needs.plan.result == 'success' && "
+                      "needs.plan.outputs.components != ''", workflow)
 
     def test_the_build_script_copies_every_packaged_file(self):
         pkgbuild = (PKG / "PKGBUILD.in").read_text()
@@ -294,6 +296,22 @@ class SteamSyncTests(unittest.TestCase):
         self.assertEqual([e["appname"] for e in entries.values()], ["Some Game", "Second Game (PS5)"])
         self.assertEqual(list(entries), ["0", "1"])
         self.assertFalse(list((self.cfg / "grid").glob(f"{appid}*")))
+
+    def test_ghost_of_yotei_gets_its_add_on_labels_once(self):
+        self.add_game("PPSA26344-app0", "Ghost of Yotei")
+        addcont = self.home / ".config/KytyPS5-Native/addcont/PPSA26344"
+        r = self.sync("--dry-run")
+        self.assertIn("add-ons to register", r.stdout)
+        self.assertFalse(addcont.exists())
+        addcont.parent.mkdir(parents=True)
+        addcont.write_text("# mine\nGHOST2APP0000000\nOTHER0000000000=/x")
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(addcont.read_text(),
+                         "# mine\nGHOST2APP0000000\nOTHER0000000000=/x\nGHOST2BASE000000\n")
+        self.sync()
+        self.assertEqual(addcont.read_text().count("GHOST2BASE000000"), 1)
+        self.assertFalse((self.home / ".config/KytyPS5-Native/addcont/PPSA00001").exists())
 
     def test_the_default_folder_is_games_ps5(self):
         r = subprocess.run(["python3", str(self.TOOL), "--help"], text=True, capture_output=True)

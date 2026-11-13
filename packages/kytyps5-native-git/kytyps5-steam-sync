@@ -30,6 +30,12 @@ Examples:
   kytyps5-steam-sync --yes              stop and restart Steam without asking
   kytyps5-steam-sync --art-only         only re-copy artwork from the game folders
 
+A game that hangs without its add-on licences gets them registered: for a
+folder whose name has a title id in ADDCONT (Ghost of Yotei, PPSA26344), the
+labels are added to ~/.config/KytyPS5-Native/addcont/<title id>, which
+kytyps5-run passes to the emulator as --addcont. Lines already in that file
+are kept; nothing in the game folder is checked.
+
 After adding: turn Steam Input OFF for the new shortcuts in Steam, or Kyty only
 sees Steam's virtual pad (no motion controls, haptics, adaptive triggers).
 """
@@ -56,6 +62,11 @@ DEFAULT_GAMES_DIR = '~/Games/PS5'
 STEAM_UNIT = 'steam-launcher.service'
 RUNNER_NAMES = ('kytyps5-run', 'kytyps5-run.sh')
 ART_NAMES = ('%s.png', '%s_hero.png', '%s_icon.png', '%sp.png')
+# Add-on labels a game cannot start without (it waits on the loading screen
+# forever): upstream docs/ghost-of-yotei-additional-content.md, v02.002.000.
+ADDCONT = {
+    'PPSA26344': ('GHOST2APP0000000', 'GHOST2BASE000000'),  # Ghost of Yotei
+}
 
 # --------------------------------------------------------------- shortcuts.vdf
 # Binary VDF: 0x00 section (name NUL, body until 0x08), 0x01 string (name NUL,
@@ -544,6 +555,45 @@ def new_entry(appid, appname, runner, game_path, keep_steam, icon_path):
     return e
 
 
+def addcont_dir():
+    return os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'),
+                        'KytyPS5-Native', 'addcont')
+
+
+def addcont_missing(game, folder):
+    """(title id, file, labels it still lacks) for a game in ADDCONT, else None.
+    The folder name decides; the game's files are not looked at."""
+    name = os.path.basename(game.dir)
+    title = next((t for t in ADDCONT if t in name), None)
+    if not title:
+        return None
+    path = os.path.join(folder, title)
+    have = set()
+    try:
+        with open(path, encoding='utf-8', errors='replace') as fh:
+            for line in fh:
+                line = line.split('#', 1)[0].strip()
+                if line:
+                    have.add(line.split('=', 1)[0].strip())
+    except OSError:
+        pass
+    return title, path, [l for l in ADDCONT[title] if l not in have]
+
+
+def add_addcont(path, labels):
+    """Append labels to an addcont file, keeping what is in it."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, 'rb') as fh:
+            old = fh.read()
+    except OSError:
+        old = b''
+    with open(path, 'a', encoding='utf-8') as fh:
+        if old and not old.endswith(b'\n'):
+            fh.write('\n')
+        fh.write(''.join(l + '\n' for l in labels))
+
+
 def ask(text, default=False, tty=True):
     if not tty:
         print('%s  [no terminal here -> %s]' % (text, 'yes' if default else 'no'))
@@ -658,6 +708,16 @@ def main(argv=None):
     for path, rows in by_path.items():
         if len(rows) > 1:
             print('  ! %d shortcuts point at the same folder %s' % (len(rows), path))
+
+    addcont = [a for a in (addcont_missing(g, addcont_dir()) for g in games) if a]
+    for title, path, labels in addcont:
+        if not labels:
+            print('  a %s add-ons registered in %s' % (title, path))
+        elif args.list or args.dry_run:
+            print('  a %s add-ons to register in %s: %s' % (title, path, ' '.join(labels)))
+        else:
+            add_addcont(path, labels)
+            print('  a %s add-ons registered in %s: %s' % (title, path, ' '.join(labels)))
 
     if args.list:
         return 0
