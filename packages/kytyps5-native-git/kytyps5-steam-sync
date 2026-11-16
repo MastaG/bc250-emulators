@@ -34,7 +34,9 @@ A game that hangs without its add-on licences gets them registered: for a
 folder whose name has a title id in ADDCONT (Ghost of Yotei, PPSA26344), the
 labels are added to ~/.config/KytyPS5-Native/addcont/<title id>, which
 kytyps5-run passes to the emulator as --addcont. Lines already in that file
-are kept; nothing in the game folder is checked.
+are kept. Add-on packages go in an addcont folder inside the game folder
+(each with its own sce_sys/param.json): kytyps5-run passes that folder as
+--addcont-dir by itself, so the shortcut needs nothing for it.
 
 After adding: turn Steam Input OFF for the new shortcuts in Steam, or Kyty only
 sees Steam's virtual pad (no motion controls, haptics, adaptive triggers).
@@ -63,9 +65,14 @@ STEAM_UNIT = 'steam-launcher.service'
 RUNNER_NAMES = ('kytyps5-run', 'kytyps5-run.sh')
 ART_NAMES = ('%s.png', '%s_hero.png', '%s_icon.png', '%sp.png')
 # Add-on labels a game cannot start without (it waits on the loading screen
-# forever): upstream docs/ghost-of-yotei-additional-content.md, v02.002.000.
+# forever). Ghost of Yotei 02.002.000: the 15 catalogue labels the beta fork's
+# own launcher registers (beta/installed-runtime-selector.sh), licences only.
 ADDCONT = {
-    'PPSA26344': ('GHOST2APP0000000', 'GHOST2BASE000000'),  # Ghost of Yotei
+    'PPSA26344': (  # Ghost of Yotei
+        'GHOST2APP0000000', 'GHOST2BASE000000', 'GHOST2BASEME0000', 'GHOST2CEUPGRADE0',
+        'GHOST2COLLECTORS', 'GHOST2DDE0000000', 'GHOST2DISC000000', 'GHOST2DLC0000000',
+        'GHOST2DLCPREPURC', 'GHOST2DLCREVIEW0', 'GHOST2LEGENDS000', 'GHOST2LEGENDSUPG',
+        'GHOST2PREORDER00', 'GHOST2SAPPORO000', 'GHOST2SHIP000000'),
 }
 
 # --------------------------------------------------------------- shortcuts.vdf

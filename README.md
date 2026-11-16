@@ -281,6 +281,22 @@ To undo: `sudo systemctl disable --now kyty-lodhw.service` and
   `KYTYPS5_DS_SPEAKER=off` leaves the levels alone. `amixer` (`alsa-utils`) sets
   the mixer. With `bc250-dual-audio`, version 0.17 or newer is needed for the
   haptics to reach the controller.
+- **Add-ons (DLC) from a Steam shortcut:** `kytyps5-run` passes a game's
+  add-ons to the emulator in two ways, and uses both when both are there:
+  - **An `addcont` folder inside the game folder**, for example
+    `~/Games/PS5/PPSA26344-app0/addcont/`, holding add-on packages that each
+    have their own `sce_sys/param.json`. It is passed as `--addcont-dir`, the
+    same as the launcher's add-ons folder setting. Nothing else is needed: the
+    shortcut stays the same.
+  - **A licence list**, `~/.config/KytyPS5-Native/addcont/<title id>`: one
+    add-on label per line (`<label>`, or `<label>=<folder with its data>`), a
+    `#` starts a comment. Each line is passed as `--addcont`.
+    `kytyps5-steam-sync` fills it in for games known to wait forever on their
+    loading screen without their licences. For Ghost of Yōtei (PPSA26344) these
+    are the 15 labels the beta fork's own launcher registers.
+
+  The game's log (`~/.local/share/KytyPS5-Native/logs/<title id>.log`) shows
+  the add-ons passed on each start (`add-ons: ...`).
 - Upstream's Decky plugin is for SteamOS and installs its own copy of Kyty; it
   is not needed with this package.
 
