@@ -248,7 +248,9 @@ jobs:
           any=false
           shopt -s nullglob
           dirs=()
-          for tarball in "$RUNNER_TEMP"/changes/*/changes-*.tar; do
+          # download-artifact puts each artifact in a folder of its name, but a
+          # single one straight into the path: look in both places.
+          for tarball in "$RUNNER_TEMP"/changes/changes-*.tar "$RUNNER_TEMP"/changes/*/changes-*.tar; do
             dir="$(mktemp -d)"
             tar -C "$dir" -xf "$tarball"
             dirs+=("$dir")
