@@ -12,6 +12,14 @@ fallback instead (lichii-bc250 sets it itself). --native-mesh leaves it out
 (remembered); EDEN_NX2_NO_MESH would skip the draws instead, which loses
 geometry.
 
+Every shortcut also gets DISABLE_VK_LAYER_VALVE_steam_fossilize_1=1 (Steam's
+shader pre-cache layer records every pipeline the emulator builds and never
+stops growing: 42 GB in a day on the BC-250) and DISABLE_BGFX=1 (Borderless
+Gaming's Vulkan layer aborts Lichii at start; harmless where it is not
+installed). Some games get their own variables on top (GAME_ENV below), for
+example Zelda: Ocarina of Time its 30 fps tick and the handheld display mode,
+the way lethevimlet's lichii-bc250 launcher sets them. --env wins over both.
+
 What a run does:
   1. Games: every .nup (also .nx/.xci/.nsp) in the folder gets a shortcut
        lichii -f -g "<full path to the game file>"
@@ -63,6 +71,17 @@ DEFAULT_DIR = os.path.join(HOME, 'Games/Switch2')
 EMULATORS = {'lichii': '/usr/bin/lichii', 'lichii-bc250': '/usr/bin/lichii-bc250'}
 # The variable that sends mesh draws to Lichii's compute fallback (see the docstring).
 MESH_FALLBACK = 'EDEN_NX2_FORCE_MESH_FALLBACK=1'
+# Every shortcut (see the docstring).
+BASE_ENV = ['DISABLE_VK_LAYER_VALVE_steam_fossilize_1=1', 'DISABLE_BGFX=1']
+# Per game: (title ID, title pattern, variables). A game matches by the title ID in its
+# file name ("[0400486024dec000]") or, without one, by its title.
+GAME_ENV = [
+    # Zelda: Ocarina of Time (Switch 2) asks for 30 fps: start frames on a 30 Hz tick, present
+    # every second vblank, report the handheld display mode (lichii-bc250's launcher).
+    ('0400486024dec000', re.compile(r'ocarina of time', re.IGNORECASE),
+     ['EDEN_NX2_VSYNC_HZ=30', 'EDEN_NX2_SWAP_INTERVAL=2', 'EDEN_VI2_MAX_RESOLUTION_MODE=1']),
+]
+TITLE_ID = re.compile(r'\[([0-9a-f]{16})\]', re.IGNORECASE)
 GAME_EXTS = ('.nup', '.nx', '.xci', '.nsp')
 LAUNCH_FLAGS = '-f -g'
 TAG = 'Nintendo Switch 2 - Lichii'
@@ -208,6 +227,24 @@ def shortcut_env(env, emulator, native_mesh):
             and MESH_FALLBACK.split('=', 1)[0] not in names):
         return env + [MESH_FALLBACK]
     return env
+
+
+def env_for(game, title, env):
+    """A shortcut's environment: BASE_ENV, the game's GAME_ENV, then env (the remembered
+    --env and the mesh fallback); a later NAME replaces an earlier one."""
+    m = TITLE_ID.search(os.path.basename(game))
+    tid = m.group(1).lower() if m else None
+    out = list(BASE_ENV)
+    for gid, pattern, extra in GAME_ENV:
+        if (tid == gid) if tid else bool(pattern.search(title or os.path.basename(game))):
+            out += extra
+    out += env
+    merged = collections.OrderedDict()
+    for e in out:
+        name = e.split('=', 1)[0]
+        merged.pop(name, None)
+        merged[name] = e
+    return list(merged.values())
 
 
 def launch_options(game, env):
@@ -548,6 +585,9 @@ def main():
                                     ', '.join(meta.get('genres') or []) or '-'))
         else:
             print('  (not found in Nintendo\'s store, name from the file)')
+        genv = env_for(g, title, env)
+        if genv != list(BASE_ENV) + env:
+            print('  environment: %s' % ' '.join(genv[len(BASE_ENV):]))
         k = by_game.get(g)
         appid = (int(entries[k]['appid']) & 0xffffffff) if k else new_appid(g, taken)
         sgdb = sgdb_art(key, title) if key and (a.refresh_art or not os.path.exists(
@@ -567,15 +607,15 @@ def main():
                     change['icon'] = icon
                 if not ours:
                     change['exe'] = '"%s"' % emulator
-                if e.get('LaunchOptions') != launch_options(g, env):
-                    change['LaunchOptions'] = launch_options(g, env)
+                if e.get('LaunchOptions') != launch_options(g, genv):
+                    change['LaunchOptions'] = launch_options(g, genv)
                 if change:
                     update[k] = change
                     print('  shortcut: update (%s)' % ', '.join(sorted(change)))
                 else:
                     print('  shortcut: ok')
         else:
-            add.append(new_entry(appid, title, g, icon, emulator, env))
+            add.append(new_entry(appid, title, g, icon, emulator, genv))
             print('  shortcut: new (appid %d)' % appid)
         st['appid'] = appid
         state[g] = st
