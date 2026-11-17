@@ -1,70 +1,43 @@
 #!/usr/bin/env bash
 # Resolve which KytyPS5-Native commit kytyps5-native-git builds.
 #
-# The source is dmorazasanchez/KytyPS5-Native-beta (since 2026-11-12), the
-# BC-250 beta fork of superkeka/KytyPS5-Native. Its releases are betas, marked
-# as GitHub prereleases (2026.11.11-beta4), so the newest release of any kind
-# is taken, not GitHub's "latest" (which skips prereleases). Tracking main itself
-# would also pick up commits the fork never released.
+# The newest commit of superkeka/KytyPS5-Native's main branch (since
+# 2026-11-17; from 2026-11-12 the newest release of the dmorazasanchez beta
+# fork, before that upstream's newest release). Upstream also publishes a
+# release for every main push whose CI passed; main itself is built so the
+# package follows it without waiting for that.
 #
-# Prints an env file: the release tag and the full commit it was made from.
-# Set KYTY_TAG to build a specific release instead of the newest one.
+# Prints an env file: KYTY_TAG (the branch, shown in the CI summary) and the
+# full commit. Set KYTY_COMMIT to build a specific commit instead.
 set -Eeuo pipefail
 
-REPOSITORY="dmorazasanchez/KytyPS5-Native-beta"
-TAG="${KYTY_TAG:-}"
+REPOSITORY="superkeka/KytyPS5-Native"
+BRANCH="main"
 
-# Plain curl rather than gh, as in resolve-protonge.sh: this also runs where
-# there is no GitHub CLI. A transient failure must not resolve to something
-# else -- the build cache keys on the commit -- so retry, then give up loudly.
-attempts=5
-retry() {
-    local what="$1" out attempt
-    shift
+if [[ -n "${KYTY_COMMIT:-}" ]]; then
+    commit="$KYTY_COMMIT"
+else
+    # A transient failure must not resolve to something else -- the build
+    # cache keys on the commit -- so retry, then give up loudly.
+    attempts=5 commit=""
     for attempt in $(seq 1 "$attempts"); do
-        if out="$("$@" 2>&1)"; then
-            printf '%s\n' "$out"
-            return 0
+        if out="$(git ls-remote "https://github.com/${REPOSITORY}.git" "refs/heads/${BRANCH}" 2>&1)"; then
+            commit="$(awk 'NR == 1 { print $1 }' <<<"$out")"
+            [[ "$commit" =~ ^[0-9a-f]{40}$ ]] && break
         fi
-        printf 'WARN: could not query %s (attempt %d/%d): %s\n' \
-            "$what" "$attempt" "$attempts" "${out%%$'\n'*}" >&2
+        commit=""
+        printf 'WARN: could not resolve %s %s (attempt %d/%d): %s\n' \
+            "$REPOSITORY" "$BRANCH" "$attempt" "$attempts" "${out%%$'\n'*}" >&2
         if (( attempt < attempts )); then sleep $(( attempt * 5 )); fi
     done
-    printf 'ERROR: gave up querying %s after %d attempts\n' "$what" "$attempts" >&2
-    return 1
-}
-
-if [[ -z "$TAG" ]]; then
-    auth=()
-    token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-    [[ -z "$token" ]] || auth=(-H "Authorization: Bearer $token")
-    # Newest first; drafts are not visible without push access.
-    TAG="$(retry "the newest release" curl -fsSL "${auth[@]}" \
-        -H 'Accept: application/vnd.github+json' \
-        "https://api.github.com/repos/${REPOSITORY}/releases?per_page=1" |
-        sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
 fi
-
-# The fork's tags look like 2026.11.11-beta4. Anything else means its release
-# scheme changed; stop rather than guess.
-if [[ ! "$TAG" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-beta[0-9]+$ ]]; then
-    printf 'ERROR: unexpected KytyPS5-Native tag: %s\n' "$TAG" >&2
-    exit 1
-fi
-
-# `gh release create --target` makes a lightweight tag; ^{} covers an annotated
-# one too.
-refs="$(retry "the tag ${TAG}" git ls-remote "https://github.com/${REPOSITORY}.git" \
-    "refs/tags/${TAG}" "refs/tags/${TAG}^{}")"
-commit="$(awk '$2 ~ /\^\{\}$/ { print $1 }' <<<"$refs")"
-[[ -n "$commit" ]] || commit="$(awk 'NR == 1 { print $1 }' <<<"$refs")"
 
 if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-    printf 'ERROR: tag %s resolved to %q, not a commit\n' "$TAG" "$commit" >&2
+    printf 'ERROR: could not resolve %s %s to a commit (got %q)\n' "$REPOSITORY" "$BRANCH" "$commit" >&2
     exit 1
 fi
 
 cat <<EOF_INFO
-KYTY_TAG=${TAG}
+KYTY_TAG=${BRANCH}
 KYTY_COMMIT=${commit}
 EOF_INFO

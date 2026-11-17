@@ -105,13 +105,11 @@ The version is the commit date, commit count and hash (`20261112.r30626.g83071fd
 
 `kytyps5-native-git` packages [KytyPS5-Native](https://github.com/superkeka/KytyPS5-Native):
 PS5 games, with their GPU work running natively on the BC-250's PS5 APU (gfx1013).
-Since 2026-11-12 it is built from
-[KytyPS5-Native-beta](https://github.com/dmorazasanchez/KytyPS5-Native-beta), the
-BC-250 beta fork of it: the commit of the fork's newest release (a beta, such as
-`2026.11.11-beta4`), rebuilt whenever that moves. Only the emulator itself is
-built, as before; the fork's AppImage extras (its own launcher, bundled runtimes,
-`--prepare-system`) are not part of the package. Only use game files you obtained
-legally.
+It is built from the newest commit of upstream's `main` branch and rebuilt
+whenever that moves (from 2026-11-12 to 2026-11-17 it was built from the
+[KytyPS5-Native-beta](https://github.com/dmorazasanchez/KytyPS5-Native-beta)
+fork's releases). The version is the commit date, commit count and hash
+(`20261117.r2448.gf820b8e-<pkgrel>`). Only use game files you obtained legally.
 
 ```bash
 sudo pacman -S kytyps5-native-git
@@ -293,7 +291,7 @@ To undo: `sudo systemctl disable --now kyty-lodhw.service` and
     `#` starts a comment. Each line is passed as `--addcont`.
     `kytyps5-steam-sync` fills it in for games known to wait forever on their
     loading screen without their licences. For Ghost of Yōtei (PPSA26344) these
-    are the 15 labels the beta fork's own launcher registers.
+    are the 15 labels the KytyPS5-Native-beta fork's own launcher registers.
 
   The game's log (`~/.local/share/KytyPS5-Native/logs/<title id>.log`) shows
   the add-ons passed on each start (`add-ons: ...`).

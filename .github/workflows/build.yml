@@ -55,10 +55,11 @@ jobs:
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
-          # Repository variables: set one to a tag to build that release
-          # instead of the newest one.
+          # Repository variables: LICHII_TAG set to a tag builds that release
+          # instead of the newest one; KYTY_COMMIT set to a commit builds that
+          # instead of KytyPS5-Native's main.
           LICHII_TAG: ${{ vars.LICHII_TAG }}
-          KYTY_TAG: ${{ vars.KYTY_TAG }}
+          KYTY_COMMIT: ${{ vars.KYTY_COMMIT }}
         run: |
           set -euo pipefail
           eval "$(./scripts/resolve-lichii.sh)"
@@ -321,7 +322,8 @@ jobs:
               echo
               echo "## kytyps5-native-git $(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_PKGVER)-$(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_PKGREL)"
               echo
-              echo "KytyPS5-Native, upstream release \`$(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_TAG)\`, plus \`kytyps5-steam-sync\`."
+              commit=$(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_COMMIT)
+              echo "KytyPS5-Native, upstream main at [\`${commit:0:9}\`](https://github.com/superkeka/KytyPS5-Native/commit/$commit), plus \`kytyps5-steam-sync\`."
             fi
           } > "$notes"
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

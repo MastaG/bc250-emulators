@@ -112,12 +112,19 @@ class LauncherTests(unittest.TestCase):
 
 
 class ResolverTests(unittest.TestCase):
-    def test_a_tag_outside_upstreams_scheme_is_refused(self):
-        env = dict(os.environ, KYTY_TAG="v1.0")
+    def test_a_commit_that_is_not_a_full_hash_is_refused(self):
+        env = dict(os.environ, KYTY_COMMIT="f820b8e")
         result = subprocess.run([str(ROOT / "scripts/resolve-kytyps5-native.sh")],
                                 env=env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unexpected KytyPS5-Native tag", result.stderr)
+        self.assertIn("to a commit", result.stderr)
+
+    def test_a_given_commit_is_built_from_main(self):
+        commit = "f820b8e9" + "0" * 32
+        env = dict(os.environ, KYTY_COMMIT=commit)
+        result = subprocess.run([str(ROOT / "scripts/resolve-kytyps5-native.sh")],
+                                env=env, capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.split(), ["KYTY_TAG=main", f"KYTY_COMMIT={commit}"])
 
 
 class ReadmeTests(unittest.TestCase):
