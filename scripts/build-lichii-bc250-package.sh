@@ -68,7 +68,7 @@ for path in usr/bin/lichii-bc250 usr/bin/lichii-bc250-cli usr/bin/lichii-bc250-r
             usr/lib/lichii-bc250/lichii-bc250 usr/lib/lichii-bc250/lichii-bc250-cli \
             usr/lib/lichii-bc250/lichii-bc250-env \
             usr/share/applications/io.github.lethevimlet.lichii-bc250.desktop \
-            usr/share/doc/lichii-bc250/oot.ini; do
+            usr/share/doc/lichii-bc250/game.ini; do
     grep -qx -- "$path" <<<"$listing" || {
         printf 'ERROR: lichii-bc250 is missing %s\n' "$path" >&2
         exit 1
