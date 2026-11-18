@@ -131,6 +131,8 @@ Where everything is:
 | `/usr/bin/kytyps5-native` | Starts the launcher (also in the application menu) |
 | `/usr/bin/kytyps5-run` | Starts a game from a Steam shortcut (step 3) |
 | `/usr/bin/kytyps5-steam-sync` | Adds the games in `~/Games/PS5` to Steam as shortcuts, with their own name and artwork (step 3) |
+| `/usr/bin/kyty-upscaler-scan` | Scans a game for the upscaler and frame generation and writes its profile to `~/.config/KytyPS5-Native/upscaler-profiles/` (`kyty-upscaler-scan ensure /path/to/game`) |
+| `/usr/share/kytyps5-native-git/` | The fork's per-game defaults and tested profiles (`title-defaults`, `title-profiles`, `astro-templates`) |
 | `/usr/bin/kyty_emulator` | The emulator on the command line (`kyty_emulator --help`, `kyty_emulator --game /path/to/game`) |
 | `/usr/lib/systemd/system/kyty-lodhw.service` | The GPU helper (step 2), runs `/usr/lib/kytyps5-native/kyty-lodhw` as root, socket `/run/kyty-lodhw.sock` |
 | `/usr/share/doc/kytyps5-native-git/` | Upstream's README and its kernel notes (`bc250-amdgpu.md`) |
@@ -297,6 +299,21 @@ To undo: `sudo systemctl disable --now kyty-lodhw.service` and
 
   The game's log (`~/.local/share/KytyPS5-Native/logs/<title id>.log`) shows
   the add-ons passed on each start (`add-ons: ...`).
+- **Upscaler, frame generation and other per-game variables:** the package is
+  built with the fork's upscaler and FSR 3 frame generation (also in the
+  in-game menu of the HOME button). The runner restarts itself through
+  `systemd-run`, which drops Steam's launch options, so per-game variables go
+  in `~/.config/KytyPS5-Native/env/<title id>`: one `NAME=value` per line, a
+  `#` starts a comment. For example, after `kyty-upscaler-scan ensure
+  ~/Games/PS5/PPSA26344-app0`:
+  ```
+  KYTY_UPSCALER_PROFILE=/home/deck/.config/KytyPS5-Native/upscaler-profiles/<profile>.json
+  KYTY_UPSCALER=game
+  KYTY_UPSCALE_PRESET=dynamic
+  KYTY_FRAMEGEN=fsr3
+  ```
+  Frame generation works in HDR too once the fork has the HDR fix
+  (dmorazasanchez/KytyPS5-Native-beta#1).
 - Upstream's Decky plugin is for SteamOS and installs its own copy of Kyty; it
   is not needed with this package.
 

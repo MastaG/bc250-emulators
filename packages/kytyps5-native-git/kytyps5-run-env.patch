@@ -1,0 +1,23 @@
+From our package (bc250-emulators): ~/.config/KytyPS5-Native/env/<title id> holds
+NAME=VALUE lines for that game, read after the systemd-run detach (which passes
+on only HOME and DISPLAY), so per-game variables need no Steam launch options.
+
+diff --git a/tools/kytyps5-native/kytyps5-run.sh b/tools/kytyps5-native/kytyps5-run.sh
+index 293c8e5d..654a5d4c 100755
+--- a/tools/kytyps5-native/kytyps5-run.sh
++++ b/tools/kytyps5-native/kytyps5-run.sh
+@@ -78,6 +78,14 @@ if [ "$KEEP_STEAM" = 0 ] && [ -z "${KYTYPS5_DETACHED:-}" ] && steam_unit_active;
+ 	exec systemd-run --user --collect --quiet --unit="$unit" -E KYTYPS5_DETACHED=1 -E DISPLAY="$DISPLAY" \
+ 		-E HOME="$HOME" "$0" "$@"
+ fi
++# ~/.config/KytyPS5-Native/env/<title id>: environment variables for this game's Kyty only, a NAME=VALUE a
++# line (# starts a comment). Read here, after the detach above, which passes on only HOME and DISPLAY.
++if [ -f "$CONFIG/env/$TITLE" ]; then
++	while IFS= read -r line || [ -n "$line" ]; do
++		line=$(printf '%s' "${line%%#*}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
++		printf '%s' "$line" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=' && export "$line"
++	done < "$CONFIG/env/$TITLE"
++fi
+ 
+ APPID=${SteamAppId:-${SteamGameId:-0}}
+ if [ -n "${KYTYPS5_DETACHED:-}" ]; then

@@ -43,6 +43,9 @@ depends=('qt6-base' 'vulkan-icd-loader' 'libx11' 'libxext' 'libxcursor' 'libxi'
 makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'glslang' 'python' 'pkgconf'
              'wayland-protocols' 'libxtst' 'mesa')
 optdepends=('xorg-xprop: Steam shortcuts through kytyps5-run'
+            'binutils: kyty-upscaler-scan (the upscaler profile of a game, for HLX and frame generation)'
+            'llvm: kyty-upscaler-scan (llvm-mc)'
+            'python-numpy: a faster kyty-upscaler-scan'
             'alsa-utils: a DualSense speaker at full mixer level (amixer)')
 provides=("$_name")
 conflicts=("$_name")
@@ -54,8 +57,10 @@ source=("$_name::git+https://github.com/dmorazasanchez/KytyPS5-Native-beta.git#c
         'kytyps5-native.desktop'
         'kyty-lodhw.service'
         'kytyps5-steam-sync'
-        'kytyps5-run-addcont.patch')
+        'kytyps5-run-addcont.patch'
+        'kytyps5-run-env.patch')
 sha256sums=('SKIP'
+            'SKIP'
             'SKIP'
             'SKIP'
             'SKIP'
@@ -78,9 +83,18 @@ prepare() {
     if ! grep -q addcont-dir tools/kytyps5-native/kytyps5-run.sh; then
         git apply "$srcdir/kytyps5-run-addcont.patch"
     fi
+    # Our own: per-game variables from ~/.config/KytyPS5-Native/env/<title id>,
+    # read after the runner's systemd-run detach (which drops the environment).
+    if ! grep -q 'CONFIG/env/' tools/kytyps5-native/kytyps5-run.sh; then
+        git apply "$srcdir/kytyps5-run-env.patch"
+    fi
 }
 
 build() {
+    # KYTY_NATIVE_UPSCALER: the fork's HLX upscaler, FSR 3 frame generation and
+    # their in-game menu entries, in the one build (the fork's release ships it
+    # as kyty_emulator_native_upscaler beside a plain kyty_emulator_native; the
+    # extra code only runs for a matched title profile or when switched on).
     # Upstream's own flags (Release, clang, ThinLTO via IPO) on the repo's
     # BC-250 CPU target. makepkg's hardening flags are left out on purpose:
     # the emulator maps guest code at fixed addresses and writes trampolines,
@@ -95,7 +109,8 @@ build() {
         -DCMAKE_CXX_COMPILER=clang++ \
         -DKYTY_BUILD_ORIGIN=Fork \
         -DKYTY_BUILD_REPOSITORY=dmorazasanchez/KytyPS5-Native-beta \
-        -DKYTY_RELEASE_TAG="@KYTY_TAG@"
+        -DKYTY_RELEASE_TAG="@KYTY_TAG@" \
+        -DKYTY_NATIVE_UPSCALER=ON
     cmake --build build --target launcher kyty_emulator kyty_updater kyty-lodhw
 }
 
@@ -112,6 +127,18 @@ package() {
     install -m755 "$staged/kyty_launcher" "$staged/kyty_emulator" "$staged/kyty-lodhw" \
         "$staged/kytyps5-run.sh" "$dest/"
     cp -r --no-preserve=ownership "$staged/assets" "$dest/"
+    # The fork's upscaler scanner (a game's profile for HLX and frame
+    # generation; it writes to ~/.config/KytyPS5-Native/upscaler-profiles), and
+    # its per-game defaults and tested profiles.
+    install -d "$dest/tools"
+    cp -r --no-preserve=ownership "$_name/tools/upscaler-scan" "$dest/tools/"
+    rm -rf "$dest/tools/upscaler-scan/tests"
+    find "$dest/tools" -name __pycache__ -prune -exec rm -rf {} +
+    install -d "$pkgdir/usr/bin"
+    ln -s "/usr/lib/$_name/tools/upscaler-scan/kyty-upscaler-scan" "$pkgdir/usr/bin/kyty-upscaler-scan"
+    install -d "$pkgdir/usr/share/$_name"
+    cp -r --no-preserve=ownership "$_name/beta/title-defaults" "$_name/beta/title-profiles" \
+        "$_name/beta/astro-templates" "$pkgdir/usr/share/$_name/"
     # The wrappers copy the program to the user's folder when this changes.
     printf '%s-%s\n' "$pkgver" "$pkgrel" > "$dest/VERSION"
     install -d "$pkgdir/usr/share/licenses/$pkgname"
