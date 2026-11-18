@@ -92,9 +92,10 @@ The version is the commit date, commit count and hash (`20261112.r30626.g83071fd
 - `lichii-bc250` and `lichii-bc250-cli` set the fork's BC-250 tuning variables first (texture cache caps, split GPU
   thread, frames ahead, shader workers: `/usr/lib/lichii-bc250/lichii-bc250-env`). A variable you set yourself
   wins. The fork's launcher also sets `EDEN_NX2_VSYNC_HZ=30 EDEN_NX2_SWAP_INTERVAL=2 EDEN_VI2_MAX_RESOLUTION_MODE=1`,
-  which are for Ocarina of Time only; add them to that game's launch options.
-- The fork's Ocarina of Time settings are in `/usr/share/doc/lichii-bc250/oot.ini`:
-  `lichii-bc250-cli -f -c /usr/share/doc/lichii-bc250/oot.ini -g <game>` (copy it first to change it).
+  which are for Ocarina of Time only; `lichii-steam-sync` adds them to that game's shortcut by itself.
+- The fork's settings template is in `/usr/share/doc/lichii-bc250/game.ini` (`oot.ini` before the fork's v18):
+  `lichii-bc250-cli -f -c /usr/share/doc/lichii-bc250/game.ini -g <game>` (copy it first to change it).
+  `lichii-bc250` (Qt) does not read it; per-game settings go in `~/.config/eden/custom/<TitleID>.ini`.
 - Mesh draws go through Lichii's compute fallback (`EDEN_NX2_FORCE_MESH_FALLBACK=1`, see "Tips for the
   BC-250"); `LICHII_BC250_NATIVE_MESH=1` tries DirectMesh's mesh shaders instead.
 - Steam shortcuts: `lichii-steam-sync` (installed with it) uses `lichii-bc250` when it is installed.

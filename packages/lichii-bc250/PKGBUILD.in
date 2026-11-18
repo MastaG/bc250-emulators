@@ -19,8 +19,8 @@
 #   Bazzite's Mesa has no mesh shaders, this repo's (DirectMesh) does;
 #   The two Ocarina-of-Time-only ones (30 Hz tick, swap interval 2) are left
 #   out; the example in /usr/share/doc/lichii-bc250 has them;
-# - its per-game settings for Ocarina of Time (oot.ini), installed as that
-#   example, not used by default;
+# - its settings template (game.ini, oot.ini before its v18), installed as
+#   that example, not used by default;
 # - system tuning (UMA, swappiness, compaction, swapfile, TTM limit): outside
 #   a package's business, see the README.
 #
@@ -156,12 +156,13 @@ package() {
         > "$srcdir/$id.metainfo.xml"
     install -Dm644 "$srcdir/$id.metainfo.xml" "$pkgdir/usr/share/metainfo/$id.metainfo.xml"
 
-    # The fork's Ocarina of Time settings and the variables its launcher adds.
+    # The fork's settings template (game.ini since its v18, oot.ini before),
+    # for reference: our Qt launcher does not read it.
     local doc="$pkgdir/usr/share/doc/$pkgname"
     install -d "$doc"
-    sed -n "/^    cat > \"\$APP_DIR\/oot.ini\" <<'INI'\$/,/^INI\$/p" "$_name/tools/bc250/bc250-install.sh" |
-        sed '1d;$d' > "$doc/oot.ini"
-    [[ -s "$doc/oot.ini" ]]
+    sed -En "/^    cat > \"\\\$APP_DIR\/(game|oot)\.ini\" <<'INI'\$/,/^INI\$/p" "$_name/tools/bc250/bc250-install.sh" |
+        sed '1d;$d' > "$doc/game.ini"
+    [[ -s "$doc/game.ini" ]]
     install -m644 "$_name/README.md" "$_name/CHANGELOG.md" "$doc/"
 
     install -Dm644 "$_name/LICENSE.txt" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.txt"
