@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Resolve which KytyPS5-Native commit kytyps5-native-git builds.
 #
-# The newest commit of superkeka/KytyPS5-Native's main branch (since
-# 2026-11-17; from 2026-11-12 the newest release of the dmorazasanchez beta
-# fork, before that upstream's newest release). Upstream also publishes a
-# release for every main push whose CI passed; main itself is built so the
-# package follows it without waiting for that.
+# The newest commit of the dmorazasanchez/KytyPS5-Native-beta fork's main
+# branch (since 2026-11-18; 2026-11-17 superkeka/KytyPS5-Native's main, from
+# 2026-11-12 the fork's newest release, before that superkeka's newest
+# release). The fork merges superkeka's main and tags betas now and then;
+# main itself is built so the package follows it without waiting for a tag.
 #
 # Prints an env file: KYTY_TAG (the branch, shown in the CI summary) and the
 # full commit. Set KYTY_COMMIT to build a specific commit instead.
 set -Eeuo pipefail
 
-REPOSITORY="superkeka/KytyPS5-Native"
+REPOSITORY="dmorazasanchez/KytyPS5-Native-beta"
 BRANCH="main"
 
 if [[ -n "${KYTY_COMMIT:-}" ]]; then

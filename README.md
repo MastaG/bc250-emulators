@@ -104,12 +104,13 @@ The version is the commit date, commit count and hash (`20261112.r30626.g83071fd
 
 ## KytyPS5-Native (kytyps5-native-git)
 
-`kytyps5-native-git` packages [KytyPS5-Native](https://github.com/superkeka/KytyPS5-Native):
+`kytyps5-native-git` packages [KytyPS5-Native](https://github.com/superkeka/KytyPS5-Native)
+through its BC-250 beta fork [KytyPS5-Native-beta](https://github.com/dmorazasanchez/KytyPS5-Native-beta),
+which merges superkeka's `main` and adds BC-250 work (frame generation, title profiles):
 PS5 games, with their GPU work running natively on the BC-250's PS5 APU (gfx1013).
-It is built from the newest commit of upstream's `main` branch and rebuilt
-whenever that moves (from 2026-11-12 to 2026-11-17 it was built from the
-[KytyPS5-Native-beta](https://github.com/dmorazasanchez/KytyPS5-Native-beta)
-fork's releases). The version is the commit date, commit count and hash
+It is built from the newest commit of the fork's `main` branch and rebuilt
+whenever that moves (on 2026-11-17 from superkeka's `main`, from 2026-11-12 to
+2026-11-17 from the fork's releases). The version is the commit date, commit count and hash
 (`20261117.r2448.gf820b8e-<pkgrel>`). Only use game files you obtained legally.
 
 ```bash
