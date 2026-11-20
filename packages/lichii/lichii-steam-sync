@@ -177,9 +177,27 @@ def find_shortcuts_vdf():
                 n = len(vdf_read(p)['shortcuts'])
                 if best is None or n > best[0]:
                     best = (n, p)
-    if not best:
-        raise SystemExit('no shortcuts.vdf found -- is Steam installed, and has it run once?')
-    return best[1]
+    if best:
+        return best[1]
+    # No non-Steam shortcut was ever added, so Steam has not written shortcuts.vdf yet.
+    # Start an empty one for the account that used Steam last (newest localconfig.vdf).
+    newest = None
+    for root in sorted({os.path.realpath(os.path.join(HOME, p))
+                        for p in ('.local/share/Steam', '.steam/root')}):
+        ud = os.path.join(root, 'userdata')
+        for user in os.listdir(ud) if os.path.isdir(ud) else []:
+            lc = os.path.join(ud, user, 'config/localconfig.vdf')
+            if (user.isdigit() and user != '0' and os.path.isfile(lc)
+                    and not os.path.exists(os.path.join(ud, user, 'config/shortcuts.vdf'))):
+                m = os.path.getmtime(lc)
+                if newest is None or m > newest[0]:
+                    newest = (m, os.path.join(ud, user, 'config/shortcuts.vdf'))
+    if not newest:
+        raise SystemExit('no Steam account found -- is Steam installed, and has it run once?')
+    with open(newest[1], 'wb') as fh:
+        fh.write(vdf_serialize([('shortcuts', collections.OrderedDict())]) + b'\x08')
+    print('no shortcuts.vdf yet, started an empty one: %s' % newest[1])
+    return newest[1]
 
 
 def unquote(v):

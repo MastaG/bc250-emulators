@@ -220,6 +220,25 @@ def find_shortcuts_vdf(want_user=None):
                 continue
             scored.append((len(entries), os.path.getmtime(path), user, path))
     if not scored:
+        # No non-Steam shortcut was ever added, so Steam has not written shortcuts.vdf
+        # yet: start an empty one for the account that used Steam last (newest
+        # localconfig.vdf). An existing file that can't be read is never replaced.
+        newest = None
+        for root in steam_roots():
+            ud = os.path.join(root, 'userdata')
+            for user in sorted(os.listdir(ud)) if os.path.isdir(ud) else []:
+                if (want_user and user != want_user) or not user.isdigit() or user == '0':
+                    continue
+                conf = os.path.join(ud, user, 'config')
+                lc = os.path.join(conf, 'localconfig.vdf')
+                if os.path.isfile(lc) and not os.path.exists(os.path.join(conf, 'shortcuts.vdf')):
+                    if newest is None or os.path.getmtime(lc) > newest[0]:
+                        newest = (os.path.getmtime(lc), user, os.path.join(conf, 'shortcuts.vdf'))
+        if newest:
+            with open(newest[2], 'wb') as fh:
+                fh.write(vdf_serialize([('shortcuts', collections.OrderedDict())]) + b'\x08')
+            print('no shortcuts.vdf yet, started an empty one: %s' % newest[2])
+            return newest[1], newest[2]
         raise SystemExit('no usable shortcuts.vdf under %s -- is Steam installed?'
                          % (', '.join(steam_roots()) or '~/.local/share/Steam'))
     scored.sort(reverse=True)
