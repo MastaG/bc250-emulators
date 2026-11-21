@@ -25,7 +25,7 @@ fi
 rm -rf -- "$BUILD_DIR"
 mkdir -p -- "$BUILD_DIR"
 cp -- "$PKG_DIR"/kytyps5-native-wrapper.sh "$PKG_DIR"/kytyps5-native.desktop \
-    "$PKG_DIR"/kyty-lodhw.service "$PKG_DIR"/kytyps5-steam-sync \
+    "$PKG_DIR"/kyty-lodhw.service "$PKG_DIR"/kytyps5-steam-sync "$PKG_DIR"/kytyps5-native-syncer.service \
     "$PKG_DIR"/kytyps5-native-git.install "$PKG_DIR"/kytyps5-run-addcont.patch "$PKG_DIR"/kytyps5-run-env.patch "$BUILD_DIR/"
 sed -e "s/@KYTY_COMMIT@/${KYTY_COMMIT}/" -e "s/@KYTY_TAG@/${KYTY_TAG}/" -e "s/@PKGREL@/${PKGREL}/" \
     "$PKG_DIR/PKGBUILD.in" > "$BUILD_DIR/PKGBUILD"

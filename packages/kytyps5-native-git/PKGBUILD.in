@@ -57,9 +57,11 @@ source=("$_name::git+https://github.com/dmorazasanchez/KytyPS5-Native-beta.git#c
         'kytyps5-native.desktop'
         'kyty-lodhw.service'
         'kytyps5-steam-sync'
+        'kytyps5-native-syncer.service'
         'kytyps5-run-addcont.patch'
         'kytyps5-run-env.patch')
 sha256sums=('SKIP'
+            'SKIP'
             'SKIP'
             'SKIP'
             'SKIP'
@@ -153,6 +155,8 @@ package() {
     install -Dm644 kytyps5-native.desktop "$pkgdir/usr/share/applications/kytyps5-native.desktop"
     install -Dm644 "$_name/docs/logo.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/kytyps5-native.svg"
     install -Dm644 kyty-lodhw.service "$pkgdir/usr/lib/systemd/system/kyty-lodhw.service"
+    # Opt-in: systemctl --user enable kytyps5-native-syncer (the sync shortcut in Steam at login)
+    install -Dm644 kytyps5-native-syncer.service "$pkgdir/usr/lib/systemd/user/kytyps5-native-syncer.service"
     install -Dm644 "$_name/tools/bc250-amdgpu/README.md" "$pkgdir/usr/share/doc/$pkgname/bc250-amdgpu.md"
     install -Dm644 "$_name/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
 }

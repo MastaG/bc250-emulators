@@ -57,8 +57,10 @@ makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'llvm' 'glslang' 'spirv-tools'
 # Our own LTO and flags below.
 options=('!lto' '!debug' 'strip')
 source=("$_name::git+https://github.com/zortos293/lichii.git#commit=${_commit}"
-        'lichii-steam-sync')
+        'lichii-steam-sync'
+        'lichii-syncer.service')
 sha256sums=('SKIP'
+            'SKIP'
             'SKIP')
 
 build() {
@@ -122,6 +124,7 @@ package_lichii() {
 }
 
 package_lichii-steam-sync() {
+    install=lichii-steam-sync.install
     pkgdesc="Add Nintendo Switch 2 games to Steam as Lichii shortcuts, with artwork"
     arch=('any')
     license=('GPL-2.0-only')
@@ -130,4 +133,6 @@ package_lichii-steam-sync() {
                 'lichii-bc250: the BC-250 fork, /usr/bin/lichii-bc250 (the default when installed)')
 
     install -Dm755 lichii-steam-sync "$pkgdir/usr/bin/lichii-steam-sync"
+    # Opt-in: systemctl --user enable lichii-syncer (the sync shortcut in Steam at login)
+    install -Dm644 lichii-syncer.service "$pkgdir/usr/lib/systemd/user/lichii-syncer.service"
 }

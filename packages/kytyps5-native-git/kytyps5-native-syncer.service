@@ -1,0 +1,13 @@
+[Unit]
+Description=KytyPS5-Native: the "Sync PS5 games" shortcut in Steam, for the Steam account used last
+Documentation=https://github.com/MastaG/bc250-emulators
+# Before Steam (PS5: steam-launcher.service; BC-250/CachyOS: gamescope-session.service; desktop:
+# Steam autostarts with the graphical session): shortcuts.vdf can only be written with Steam stopped.
+Before=steam-launcher.service gamescope-session.service graphical-session-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/kytyps5-steam-sync --ensure-self
+
+[Install]
+WantedBy=default.target

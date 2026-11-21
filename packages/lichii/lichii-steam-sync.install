@@ -1,0 +1,27 @@
+# Its "Sync … games" shortcut in Steam, once per Steam account (a marker in ~/.local/state/<tool>
+# remembers it, so a shortcut the user deleted stays deleted; another account gets its own). Only
+# while that user's Steam is not running: Steam rewrites its shortcut list when it exits. Otherwise
+# the next sync adds it, or "lichii-steam-sync --add-self".
+_steam_shortcut() {
+    tool=$1
+    for d in /home/*/.local/share/Steam/userdata; do
+        [ -d "$d" ] || continue
+        u=$(stat -c %U "$d") && h=$(getent passwd "$u" | cut -d: -f6) || continue
+        [ -n "$h" ] || continue
+        if pgrep -u "$u" -x steam >/dev/null 2>&1; then
+            echo "==> $tool: Steam is running for $u; its Steam shortcut comes with the next sync (or: $tool --add-self)"
+        elif out=$(runuser -u "$u" -- env HOME="$h" "$tool" --add-self-once 2>&1); then
+            case $out in *"shortcut new"*|*"+ Sync "*) echo "==> $tool: added its Steam shortcut for $u (run it from Big Picture / Gaming Mode)" ;; esac
+        else
+            echo "==> $tool: could not add its Steam shortcut for $u (try: $tool --add-self)"
+        fi
+    done
+}
+
+post_install() {
+    _steam_shortcut lichii-steam-sync
+}
+
+post_upgrade() {
+    _steam_shortcut lichii-steam-sync
+}

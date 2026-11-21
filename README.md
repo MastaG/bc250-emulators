@@ -67,6 +67,17 @@ already exist, keeping their artwork, play time and Steam settings.
 
 Steam is closed while the shortcut list is written and started again afterwards.
 
+- **Collection:** every shortcut it makes goes into the Steam collection **"Switch 2"** (`--collection NAME` for
+  another name, `--no-collection` to leave collections alone). Shortcuts of deleted games are taken out of it.
+- **Sync from Steam:** the script adds a shortcut for itself, **"Sync Switch 2 games"**, so you can run it with its default
+  settings from Big Picture / Gaming Mode. Started from Steam it continues in a systemd user unit of its own
+  (`journalctl --user -u lichii-steam-sync` shows what it did), closes Steam while it writes and starts it again.
+  When there is nothing new, Steam stays open. The shortcut is added once, when the package is installed;
+  if you removed it, `lichii-steam-sync --add-self` adds it again. It keeps itself off Steam's "Recent games".
+- **Optional, at every login:** `systemctl --user enable lichii-syncer` makes sure the "Sync Switch 2 games" shortcut is there
+  for the Steam account that logged in last, before Steam starts (Gaming Mode and desktop alike). It leaves
+  Steam alone when Steam is already running.
+
 Tips for the BC-250:
 
 - Mesh shaders: this repository's Mesa offers them (DirectMesh), but not yet for the ones Lichii's games use
@@ -346,6 +357,17 @@ question). It keeps a backup of the list next to it
 folders linked in from another drive work too. Afterwards, **turn Steam Input
 off** for each new shortcut (see above). `kytyps5-steam-sync --help` lists the
 other options.
+
+- **Collection:** every shortcut it makes goes into the Steam collection **"PlayStation 5"** (`--collection NAME` for
+  another name, `--no-collection` to leave collections alone). Shortcuts of deleted games are taken out of it.
+- **Sync from Steam:** the script adds a shortcut for itself, **"Sync PS5 games"**, so you can run it with its default
+  settings from Big Picture / Gaming Mode. Started from Steam it continues in a systemd user unit of its own
+  (`journalctl --user -u kytyps5-steam-sync` shows what it did), closes Steam while it writes and starts it again.
+  When there is nothing new, Steam stays open. The shortcut is added once, when the package is installed;
+  if you removed it, `kytyps5-steam-sync --add-self` adds it again. It keeps itself off Steam's "Recent games".
+- **Optional, at every login:** `systemctl --user enable kytyps5-native-syncer` makes sure the "Sync PS5 games" shortcut is there
+  for the Steam account that logged in last, before Steam starts (Gaming Mode and desktop alike). It leaves
+  Steam alone when Steam is already running.
 
 ## Building locally
 

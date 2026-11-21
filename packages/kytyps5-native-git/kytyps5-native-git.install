@@ -1,3 +1,23 @@
+# Its "Sync … games" shortcut in Steam, once per Steam account (a marker in ~/.local/state/<tool>
+# remembers it, so a shortcut the user deleted stays deleted; another account gets its own). Only
+# while that user's Steam is not running: Steam rewrites its shortcut list when it exits. Otherwise
+# the next sync adds it, or "kytyps5-steam-sync --add-self".
+_steam_shortcut() {
+    tool=$1
+    for d in /home/*/.local/share/Steam/userdata; do
+        [ -d "$d" ] || continue
+        u=$(stat -c %U "$d") && h=$(getent passwd "$u" | cut -d: -f6) || continue
+        [ -n "$h" ] || continue
+        if pgrep -u "$u" -x steam >/dev/null 2>&1; then
+            echo "==> $tool: Steam is running for $u; its Steam shortcut comes with the next sync (or: $tool --add-self)"
+        elif out=$(runuser -u "$u" -- env HOME="$h" "$tool" --add-self-once 2>&1); then
+            case $out in *"shortcut new"*|*"+ Sync "*) echo "==> $tool: added its Steam shortcut for $u (run it from Big Picture / Gaming Mode)" ;; esac
+        else
+            echo "==> $tool: could not add its Steam shortcut for $u (try: $tool --add-self)"
+        fi
+    done
+}
+
 # Nothing is enabled or changed here: the kernel options, the helper service and
 # the group membership are the user's to set (README, "KytyPS5-Native").
 post_install() {
@@ -7,11 +27,13 @@ post_install() {
     echo "==>     amdgpu sched_policy=2 vm_update_mode=0 cwsr_enable=0"
     echo "==>   - the GPU helper: sudo usermod -aG render \$USER"
     echo "==>     sudo systemctl enable --now kyty-lodhw.service"
+    _steam_shortcut kytyps5-steam-sync
 }
 
 post_upgrade() {
     # Restart only a helper the user turned on, so it runs the new binary.
     systemctl try-restart kyty-lodhw.service >/dev/null 2>&1 || true
+    _steam_shortcut kytyps5-steam-sync
 }
 
 pre_remove() {

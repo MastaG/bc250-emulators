@@ -58,6 +58,8 @@ import time
 DEFAULT_RUNNER = '/usr/bin/kytyps5-run'
 GAME_SUFFIX = ' (PS5)'
 COLLECTION = 'PlayStation 5'
+SELF_TOOL = 'kytyps5-steam-sync'
+SELF_NAME = 'Sync PS5 games'
 PREFERRED_LANG = 'en-US'
 STATE_NAME = '.kytyps5-steam-sync.json'
 OLD_STATE_NAMES = ('.ps5-steam.json',)
@@ -280,6 +282,156 @@ def collection_write(path, data, index, coll):
     os.replace(tmp, path)
 
 
+# ----------------------------------------------------------- its own shortcut
+# The script adds a shortcut that starts itself (--from-steam), so it can be run from Big Picture /
+# Gaming Mode. Steam has to be stopped to write shortcuts.vdf, which would stop a child of Steam too:
+# started from Steam, the script runs again in a systemd user unit of its own and returns at once.
+# Once added, a marker remembers it: a shortcut the user deleted is only added again with --add-self.
+
+SELF_OPTION = '--from-steam'
+
+
+def self_marker(tool, account):
+    """One per Steam account: each account has its own shortcut list."""
+    state = os.environ.get('XDG_STATE_HOME') or os.path.join(os.path.expanduser('~'), '.local/state')
+    return os.path.join(state, tool, 'steam-shortcut-added-%s' % account)
+
+
+def self_mark(tool, account):
+    path = self_marker(tool, account)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as fh:
+            fh.write(time.strftime('%Y-%m-%d %H:%M:%S\n'))
+    except OSError:
+        pass
+
+
+def steam_lock():
+    """One sync script at a time: kytyps5-steam-sync and lichii-steam-sync both rewrite Steam's
+    shortcut list and collections (their user units start together at login). Held until exit."""
+    import fcntl
+    state = os.environ.get('XDG_STATE_HOME') or os.path.join(os.path.expanduser('~'), '.local/state')
+    os.makedirs(state, exist_ok=True)
+    fh = open(os.path.join(state, 'bc250-steam-sync.lock'), 'w')
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print('waiting for the other Steam sync script to finish ...', flush=True)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+    return fh
+
+
+def forget_self_play(vdf_path, tool):
+    """Keep this script's own shortcut off Steam's "Recent games": clear its last-played time in
+    shortcuts.vdf and drop it from RecentLocalPlayedGameIDs in localconfig.vdf (16-byte records:
+    the 64-bit game id, a shortcut's being appid << 32 | 0x02000000, then the time). Only while
+    Steam is stopped: Steam writes both files when it exits."""
+    try:
+        top = vdf_read(vdf_path)
+        top = top[0] if isinstance(top, tuple) else top
+        ids = set()
+        for e in top['shortcuts'].values():
+            if is_self_entry(e, tool):
+                ids.add(int(e.get('appid', 0)) & 0xffffffff)
+                if e.get('LastPlayTime'):
+                    e['LastPlayTime'] = 0
+                    vdf_write(vdf_path, top)
+        path = os.path.join(os.path.dirname(vdf_path), 'localconfig.vdf')
+        if not ids or not os.path.isfile(path):
+            return
+        with open(path, encoding='utf-8') as fh:
+            text = fh.read()
+        m = re.search(r'"RecentLocalPlayedGameIDs"\s+"([0-9a-fA-F]*)"', text)
+        if not m or len(m.group(1)) % 32:
+            return
+        raw = bytes.fromhex(m.group(1))
+        recs = [raw[i:i + 16] for i in range(0, len(raw), 16)]
+        keep = [r for r in recs if struct.unpack('<Q', r[:8])[0] not in
+                {a << 32 | 0x02000000 for a in ids}]
+        if len(keep) == len(recs):
+            return
+        tmp = path + '.tmp-%d' % os.getpid()
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            fh.write(text[:m.start(1)] + b''.join(keep).hex() + text[m.end(1):])
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except (OSError, ValueError, KeyError, SystemExit) as exc:
+        print('  ! could not take %r off "Recent games": %s' % (tool, exc))
+
+
+def self_seed():
+    """Per machine and user: Steam knows the shortcuts of all machines of an account (to stream them),
+    and gives a shortcut whose id another machine already uses a new id, which the collection then lacks."""
+    try:
+        with open('/etc/machine-id') as fh:
+            mid = fh.read().strip()
+    except OSError:
+        mid = os.uname().nodename
+    return '%s %s' % (mid, os.path.expanduser('~'))
+
+
+def self_exe(tool):
+    """The script as Steam should start it: /usr/bin/<tool> when installed, else this file."""
+    installed = shutil.which(tool)
+    here = os.path.realpath(sys.argv[0])
+    return installed if installed and os.path.realpath(installed) == here else here
+
+
+def is_self_entry(entry, tool):
+    exe = entry.get('exe', '')
+    exe = exe[1:-1] if len(exe) > 1 and exe[0] == exe[-1] == '"' else exe
+    return os.path.basename(exe) == tool and SELF_OPTION in entry.get('LaunchOptions', '')
+
+
+def self_fields(tool, name):
+    """The fields that make the shortcut what it is (others stay as the user set them)."""
+    return {'appname': name, 'exe': '"%s"' % self_exe(tool),
+            'StartDir': '"%s"' % os.path.expanduser('~'), 'LaunchOptions': SELF_OPTION}
+
+
+def self_entry(appid, tool, name):
+    e = collections.OrderedDict()
+    e['appid'] = appid - 0x100000000 if appid >= 0x80000000 else appid
+    f = self_fields(tool, name)
+    e['appname'] = f['appname']
+    e['exe'] = f['exe']
+    e['StartDir'] = f['StartDir']
+    e['icon'] = ''
+    e['ShortcutPath'] = ''
+    e['LaunchOptions'] = f['LaunchOptions']
+    e['IsHidden'] = 0
+    e['AllowDesktopConfig'] = 1
+    e['AllowOverlay'] = 1
+    e['OpenVR'] = 0
+    e['Devkit'] = 0
+    e['DevkitGameID'] = ''
+    e['DevkitOverrideAppID'] = 0
+    e['LastPlayTime'] = 0
+    e['FlatpakAppID'] = ''
+    e['sortas'] = ''
+    e['tags'] = collections.OrderedDict()
+    return e
+
+
+def detach_from_steam(tool, argv, extra=()):
+    """Started by Steam: run this script again, without --from-steam, in the user unit <tool>.service
+    (outside Steam's process tree, so stopping Steam doesn't stop it). Its output: journalctl --user
+    -u <tool>. Returns only when already detached."""
+    if os.environ.get('BC250_SYNC_DETACHED'):
+        return
+    cmd = ['systemd-run', '--user', '--collect', '--quiet', '--unit=%s' % tool,
+           '-E', 'BC250_SYNC_DETACHED=1']
+    for name in ('HOME', 'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR',
+                 'DBUS_SESSION_BUS_ADDRESS'):
+        if os.environ.get(name):
+            cmd += ['-E', '%s=%s' % (name, os.environ[name])]
+    subprocess.run(['systemctl', '--user', 'reset-failed', tool + '.service'],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    args = [a for a in argv if a != SELF_OPTION] + list(extra)
+    os.execvp('systemd-run', cmd + [sys.executable, os.path.realpath(sys.argv[0])] + args)
+
+
 # ------------------------------------------------------------------------ steam
 def steam_roots():
     home = os.path.expanduser('~')
@@ -300,8 +452,34 @@ def steam_roots():
     return out
 
 
+def active_steam_user(root):
+    """userdata id of the account Steam logs into: MostRecent "1" in config/loginusers.vdf, else the
+    newest login timestamp (Steam leaves MostRecent out with one account). None if unknown."""
+    try:
+        with open(os.path.join(root, 'config', 'loginusers.vdf'), encoding='utf-8', errors='replace') as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    best = None
+    for m in re.finditer(r'"(\d{17})"\s*\{(.*?)\}', text, re.S):
+        body = m.group(2)
+        recent = re.search(r'"mostrecent"\s*"1"', body, re.I) is not None
+        ts = re.search(r'"timestamp"\s*"(\d+)"', body, re.I)
+        key = (recent, int(ts.group(1)) if ts else 0)
+        if best is None or key > best[0]:
+            best = (key, str(int(m.group(1)) - 76561197960265728))
+    return best[1] if best else None
+
+
 def find_shortcuts_vdf(want_user=None, create=True):
-    """-> (userdata id, path). With several accounts: the one with the longest list."""
+    """-> (userdata id, path): the account Steam logs into, else (several accounts, none known as
+    active) the one with the longest list."""
+    if not want_user:
+        for root in steam_roots():
+            active = active_steam_user(root)
+            if active and os.path.isdir(os.path.join(root, 'userdata', active, 'config')):
+                want_user = active
+                break
     scored = []
     for root in steam_roots():
         ud = os.path.join(root, 'userdata')
@@ -379,6 +557,9 @@ def steam_stop(wait=60):
     """-> how to start it again ('unit', 'desktop') or None when it did not stop."""
     how = 'unit' if steam_unit_active() else 'desktop'
     if how == 'unit':
+        # Masked, like kytyps5-run does: the PS5 Gaming Mode session then waits for Steam to come
+        # back instead of ending (steam_start unmasks it).
+        _run(['systemctl', '--user', 'mask', '--runtime', STEAM_UNIT])
         _run(['systemctl', '--user', 'stop', STEAM_UNIT], timeout=wait)
     else:
         steam = shutil.which('steam')
@@ -760,9 +941,21 @@ def main(argv=None):
     ap.add_argument('--collection', default=COLLECTION,
                     help='Steam collection with all KytyPS5 shortcuts (default %r)' % COLLECTION)
     ap.add_argument('--no-collection', action='store_true', help='leave Steam collections alone')
+    ap.add_argument('--add-self', action='store_true',
+                    help='only add (or repair) the %r shortcut that runs this script from Steam' % SELF_NAME)
+    ap.add_argument(SELF_OPTION, dest='from_steam', action='store_true', help=argparse.SUPPRESS)
+    ap.add_argument('--add-self-once', action='store_true', help=argparse.SUPPRESS)   # package hook
+    ap.add_argument('--ensure-self', action='store_true',
+                    help='like --add-self, but only while Steam is not running (the user unit that '
+                         'runs before Steam starts)')
     args = ap.parse_args(argv)
+    if args.from_steam:
+        detach_from_steam(SELF_TOOL, sys.argv[1:] if argv is None else list(argv), ['--yes'])
 
+    lock = steam_lock()                      # noqa: F841 (held until exit)
     games_dir = os.path.abspath(os.path.expanduser(args.dir))
+    if not os.path.isdir(games_dir) and (args.add_self or args.add_self_once or args.ensure_self):
+        os.makedirs(games_dir, exist_ok=True)       # where the games go; the shortcut syncs it
     if not os.path.isdir(games_dir):
         raise SystemExit('no such folder: %s' % games_dir)
     runner = args.runner if os.path.isabs(args.runner) else shutil.which(args.runner)
@@ -770,8 +963,30 @@ def main(argv=None):
         raise SystemExit('%s not found (install kytyps5-native-git, or pass --runner)' % args.runner)
 
     user, vdf_path = find_shortcuts_vdf(args.steam_user, create=not (args.dry_run or args.list))
+    account = user
+    if not (args.dry_run or args.list) and os.path.isfile(vdf_path) and not steam_is_running():
+        forget_self_play(vdf_path, SELF_TOOL)
+    if args.ensure_self:                         # the user unit, before Steam starts
+        if steam_is_running():
+            print('Steam is already running: the shortcut is checked at the next login')
+            return 0
+        args.add_self = True
+    if args.add_self_once:                       # the package hook: once per Steam account
+        if os.path.exists(self_marker(SELF_TOOL, account)):
+            print('the Steam shortcut was added for account %s before: left alone' % account)
+            return 0
+        args.add_self = True
     grid_dir = os.path.join(os.path.dirname(vdf_path), 'grid')
     top, entries = vdf_read(vdf_path)
+    # This script's own shortcut: added once (and with --add-self), see "its own shortcut" above.
+    self_idx = next((k for k, e in entries.items() if isinstance(e, dict) and is_self_entry(e, SELF_TOOL)),
+                    None)
+    if self_idx is not None and not os.path.exists(self_marker(SELF_TOOL, account)) and not (args.dry_run or args.list):
+        self_mark(SELF_TOOL, account)
+    self_want = args.add_self or (self_idx is None and not os.path.exists(self_marker(SELF_TOOL, account)))
+    self_set = self_fields(SELF_TOOL, SELF_NAME)
+    need_self = self_want and (self_idx is None or
+                               any(entries[self_idx].get(k) != v for k, v in self_set.items()))
     state = {}
     for name in (STATE_NAME,) + OLD_STATE_NAMES:
         try:
@@ -792,6 +1007,8 @@ def main(argv=None):
         else:
             skipped.append(name)
 
+    if args.add_self:
+        games, skipped = [], []                     # --add-self: only the own shortcut
     kyty = [(idx, e) for idx, e in entries.items()
             if isinstance(e, dict) and is_kyty_entry(e)]
 
@@ -814,6 +1031,8 @@ def main(argv=None):
             and inside(entry_game_path(e)) and not os.path.isdir(entry_game_path(e))]
     elsewhere = [(idx, e) for idx, e in kyty if id(e) not in matched
                  and not inside(entry_game_path(e))]
+    if args.add_self:
+        gone, elsewhere = [], []
 
     print('games   %s (%d game folder%s)' % (games_dir, len(games), '' if len(games) == 1 else 's'))
     print('steam   %s (userdata %s, %d shortcut%s)'
@@ -865,7 +1084,7 @@ def main(argv=None):
 
     if args.list:
         return 0
-    if not games and not gone:
+    if not games and not gone and not need_self:
         print('\nno game folders here and no shortcut of them to clean up')
         return 0
 
@@ -878,6 +1097,8 @@ def main(argv=None):
 
     drop_ids = {entry_appid(e) for _, e in remove}
     keep_ids = [entry_appid(e) for _, e in kyty if entry_appid(e) not in drop_ids]
+    if self_idx is not None:
+        keep_ids.append(entry_appid(entries[self_idx]))
     need_coll = False
     if coll is not None and not args.art_only:
         _, plus, minus = collection_change(coll, keep_ids, drop_ids)
@@ -907,7 +1128,10 @@ def main(argv=None):
             if want and e.get('icon') != want and (args.dry_run or os.path.isfile(want)):
                 icon_fixes.append((idx, want))
 
-    need_list = bool(todo or remove or icon_fixes) and not args.art_only
+    # Without --add-self the own shortcut doesn't stop Steam by itself: it comes with the next change.
+    need_self = need_self and (args.add_self or bool(todo or remove or icon_fixes) or not steam_is_running())
+    need_list = (bool(todo or remove or icon_fixes) and not args.art_only) or need_self
+    need_coll = need_coll or (need_self and coll is not None)
     if args.no_art and not need_list and not need_coll:
         print('\nnothing to do (--no-art, and nothing to add or remove)')
         return 0
@@ -924,6 +1148,9 @@ def main(argv=None):
             print('  - slot %s %r (appid %d) and its artwork' % (idx, e.get('appname'), entry_appid(e)))
         for idx, want in icon_fixes:
             print('  * slot %s icon -> %s' % (idx, want))
+        if need_self:
+            print('  %s %r  %s %s' % ('*' if self_idx is not None else '+', SELF_NAME,
+                                     self_set['exe'], SELF_OPTION))
         if not args.no_art:
             for g in known:
                 print('  * art of %s into %s for appid %d'
@@ -951,6 +1178,12 @@ def main(argv=None):
     try:
         taken = {entry_appid(e) for e in entries.values() if isinstance(e, dict)}
         new_apps = []
+        self_new = None
+        if need_self and self_idx is not None:
+            entries[self_idx].update(self_set)
+        elif need_self:
+            self_new = appid_for(SELF_NAME, self_set['exe'], self_set['StartDir'],
+                                 SELF_OPTION + ' ' + self_seed(), taken)
         if need_list:
             for idx, want in icon_fixes:
                 entries[idx]['icon'] = want
@@ -970,6 +1203,8 @@ def main(argv=None):
                 numbered[str(len(numbered))] = new_entry(
                     appid, g.appname(args.name_suffix), runner, g.dir, args.keep_steam,
                     shortcut_icon(appid, grid_dir, g) or '')
+            if self_new is not None:
+                numbered[str(len(numbered))] = self_entry(self_new, SELF_TOOL, SELF_NAME)
             for g, appid, lo in new_apps:
                 if not args.no_art:
                     sync_art(appid, g, grid_dir, state)
@@ -979,13 +1214,17 @@ def main(argv=None):
             shutil.copy2(vdf_path, backup)
             top['shortcuts'] = numbered
             blob = vdf_write(vdf_path, top)
+            if need_self:
+                self_mark(SELF_TOOL, account)
+                print('  %s %-32s %s %s' % ('*' if self_new is None else '+', SELF_NAME,
+                                           self_set['exe'], SELF_OPTION))
             for g, appid, lo in new_apps:
                 slot = next(k for k, v in numbered.items() if entry_appid(v) == appid)
                 print('  + %-32s appid %-11d slot %s  %s %s'
                       % (g.appname(args.name_suffix)[:32], appid, slot, runner, lo))
             print('\nwrote %s: %d shortcut%s (%d added, %d removed, %d icon%s fixed)\n  backup %s'
                   % (vdf_path, len(numbered), '' if len(numbered) == 1 else 's',
-                     len(new_apps), len(remove), len(icon_fixes),
+                     len(new_apps) + (self_new is not None), len(remove), len(icon_fixes),
                      '' if len(icon_fixes) == 1 else 's', backup))
             if new_apps:
                 print('\nRemember: in Steam, turn Steam Input OFF for these shortcuts -- with it')
@@ -995,7 +1234,8 @@ def main(argv=None):
             data, idx, coll = collection_read(coll_path, coll['name'])
             if coll is not None:
                 coll, plus, minus = collection_change(
-                    coll, keep_ids + [appid for g, appid, lo in new_apps], drop_ids)
+                    coll, keep_ids + [appid for g, appid, lo in new_apps]
+                    + ([self_new] if self_new is not None else []), drop_ids)
                 if plus or minus:
                     collection_write(coll_path, data, idx, coll)
                     print('collection %r: %d added, %d taken out (%d in it)'
@@ -1010,6 +1250,8 @@ def main(argv=None):
         except OSError as exc:
             print('  ! could not save %s in %s: %s' % (STATE_NAME, games_dir, exc))
     finally:
+        if restart:
+            forget_self_play(vdf_path, SELF_TOOL)   # Steam is stopped here
         if restart:
             if args.no_restart:
                 print('Steam is left stopped (start it when you like)')
