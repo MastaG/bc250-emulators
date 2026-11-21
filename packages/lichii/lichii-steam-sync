@@ -862,7 +862,13 @@ def main():
     if not os.path.exists(emulator):
         print('  ! %s is missing: the shortcuts start it' % emulator)
 
-    vdf = find_shortcuts_vdf(create=not a.dry_run)
+    try:
+        vdf = find_shortcuts_vdf(create=not a.dry_run)
+    except SystemExit:
+        if a.ensure_self or a.add_self_once:   # login unit / package hook before Steam's first login
+            print('no Steam account yet: the shortcut is added at a login after Steam has been set up')
+            return 0
+        raise
     account = os.path.basename(os.path.dirname(os.path.dirname(vdf)))
     if not a.dry_run and os.path.isfile(vdf) and not steam_running():
         forget_self_play(vdf, SELF_TOOL)

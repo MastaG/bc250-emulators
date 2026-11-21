@@ -962,7 +962,13 @@ def main(argv=None):
     if not runner or not os.path.exists(runner):
         raise SystemExit('%s not found (install kytyps5-native-git, or pass --runner)' % args.runner)
 
-    user, vdf_path = find_shortcuts_vdf(args.steam_user, create=not (args.dry_run or args.list))
+    try:
+        user, vdf_path = find_shortcuts_vdf(args.steam_user, create=not (args.dry_run or args.list))
+    except SystemExit:
+        if args.ensure_self or args.add_self_once:   # login unit / package hook before Steam's first login
+            print('no Steam account yet: the shortcut is added at a login after Steam has been set up')
+            return 0
+        raise
     account = user
     if not (args.dry_run or args.list) and os.path.isfile(vdf_path) and not steam_is_running():
         forget_self_play(vdf_path, SELF_TOOL)
