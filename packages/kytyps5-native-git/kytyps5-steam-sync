@@ -57,6 +57,7 @@ import time
 
 DEFAULT_RUNNER = '/usr/bin/kytyps5-run'
 GAME_SUFFIX = ' (PS5)'
+COLLECTION = 'PlayStation 5'
 PREFERRED_LANG = 'en-US'
 STATE_NAME = '.kytyps5-steam-sync.json'
 OLD_STATE_NAMES = ('.ps5-steam.json',)
@@ -133,11 +134,18 @@ def vdf_serialize(members):
     return bytes(out)
 
 
+# What Steam itself writes for a user without non-Steam shortcuts.
+EMPTY_VDF = b'\x00shortcuts\x00\x08\x08'
+
+
 def vdf_read(path):
     """-> (top, entries). Refuses to guess: the file has to round-trip byte for
     byte before it is rewritten, so any layout we do not know stops us here."""
-    with open(path, 'rb') as fh:
-        data = fh.read()
+    if not os.path.exists(path):
+        data = EMPTY_VDF                      # --dry-run / --list before Steam has one
+    else:
+        with open(path, 'rb') as fh:
+            data = fh.read()
     try:
         top, _ = vdf_parse(data)
         again = vdf_serialize(list(top.items())) + b'\x08'
@@ -182,6 +190,96 @@ def unquote(value):
     return value
 
 
+# ------------------------------------------------------------- Steam collection
+# Steam keeps its collections in userdata/<id>/config/cloudstorage/cloud-storage-namespace-<n>.json, a
+# list of ["user-collections.<id>", {"key", "timestamp", "value", "version", ...}] whose value is the
+# collection as JSON: {"id", "name", "added": [appid, ...], "removed": [...]}; a shortcut's appid is the
+# unsigned 32-bit one of shortcuts.vdf. An entry written with the "union-collections" conflict
+# resolution (as Steam ROM Manager writes them) is merged with Steam's cloud copy, not replaced by it.
+# Steam must be stopped: it writes the whole file again when it exits.
+
+def collection_file(vdf_path):
+    """The cloud-storage file that holds the collections (namespace 1 unless another one has them)."""
+    folder = os.path.join(os.path.dirname(vdf_path), 'cloudstorage')
+    ns = 1
+    try:
+        with open(os.path.join(folder, 'cloud-storage-namespaces.json'), encoding='utf-8') as fh:
+            for nid, _ in json.load(fh):
+                try:
+                    with open(os.path.join(folder, 'cloud-storage-namespace-%d.json' % int(nid)),
+                              encoding='utf-8') as f2:
+                        if '"user-collections.' in f2.read():
+                            ns = int(nid)
+                            break
+                except OSError:
+                    continue
+    except (OSError, ValueError, TypeError):
+        pass
+    return os.path.join(folder, 'cloud-storage-namespace-%d.json' % ns)
+
+
+def collection_read(path, name):
+    """-> (file entries, index of the collection or None, the collection). The collection is found by
+    its name (any case), so one made by hand in Steam is used too; else a new one is returned.
+    (None, None, None) when Steam has no cloud-storage file yet."""
+    try:
+        with open(path, encoding='utf-8') as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return None, None, None
+    except ValueError as exc:
+        print('  ! %s: %s -- collection left alone' % (path, exc))
+        return None, None, None
+    if not isinstance(data, list):
+        return None, None, None
+    for i, item in enumerate(data):
+        if not (isinstance(item, list) and len(item) == 2 and isinstance(item[1], dict)
+                and str(item[0]).startswith('user-collections.')):
+            continue
+        if item[1].get('is_deleted') or not item[1].get('value'):
+            continue
+        try:
+            coll = json.loads(item[1]['value'])
+        except ValueError:
+            continue
+        if isinstance(coll, dict) and str(coll.get('name', '')).strip().upper() == name.strip().upper():
+            coll['added'] = [int(a) for a in coll.get('added') or []]
+            coll['removed'] = [int(a) for a in coll.get('removed') or []]
+            return data, i, coll
+    cid = 'bc250-' + ''.join('%02x' % b for b in hashlib.md5(name.encode('utf-8')).digest()[:6])
+    return data, None, {'id': cid, 'name': name, 'added': [], 'removed': []}
+
+
+def collection_change(coll, want, drop):
+    """-> (new collection, appids added, appids taken out): every appid of `want` in it, no appid of
+    `drop`; nothing else of the collection is touched (games put in it by hand stay)."""
+    want = [a for a in want if a not in drop]
+    added = [a for a in coll['added'] if a not in drop]
+    plus = [a for a in want if a not in added]
+    minus = [a for a in coll['added'] if a in drop]
+    new = dict(coll, added=added + plus, removed=[a for a in coll['removed'] if a not in want])
+    return new, plus, minus
+
+
+def collection_write(path, data, index, coll):
+    """Write the collection into the cloud-storage file (a copy of the old file next to it)."""
+    now = int(time.time())
+    key = 'user-collections.%s' % coll['id']
+    entry = [key, {'key': key, 'timestamp': now,
+                   'value': json.dumps(coll, separators=(',', ':'), ensure_ascii=False),
+                   'version': str(now), 'conflictResolutionMethod': 'custom',
+                   'strMethodId': 'union-collections'}]
+    shutil.copy2(path, '%s.bak-%s' % (path, time.strftime('%Y-%m-%d-%H%M%S')))
+    if index is None:
+        data.append(entry)
+    else:
+        data[index] = entry
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(data, fh, separators=(',', ':'), ensure_ascii=False)
+    os.replace(tmp, path)
+
+
 # ------------------------------------------------------------------------ steam
 def steam_roots():
     home = os.path.expanduser('~')
@@ -202,7 +300,7 @@ def steam_roots():
     return out
 
 
-def find_shortcuts_vdf(want_user=None):
+def find_shortcuts_vdf(want_user=None, create=True):
     """-> (userdata id, path). With several accounts: the one with the longest list."""
     scored = []
     for root in steam_roots():
@@ -235,9 +333,12 @@ def find_shortcuts_vdf(want_user=None):
                     if newest is None or os.path.getmtime(lc) > newest[0]:
                         newest = (os.path.getmtime(lc), user, os.path.join(conf, 'shortcuts.vdf'))
         if newest:
-            with open(newest[2], 'wb') as fh:
-                fh.write(vdf_serialize([('shortcuts', collections.OrderedDict())]) + b'\x08')
-            print('no shortcuts.vdf yet, started an empty one: %s' % newest[2])
+            if create:
+                with open(newest[2], 'wb') as fh:
+                    fh.write(EMPTY_VDF)
+                print('no shortcuts.vdf yet, started an empty one: %s' % newest[2])
+            else:
+                print('no shortcuts.vdf yet, a real run starts an empty one: %s' % newest[2])
             return newest[1], newest[2]
         raise SystemExit('no usable shortcuts.vdf under %s -- is Steam installed?'
                          % (', '.join(steam_roots()) or '~/.local/share/Steam'))
@@ -656,6 +757,9 @@ def main(argv=None):
     ap.add_argument('--art-only', action='store_true',
                     help='only re-copy artwork for the shortcuts that already exist')
     ap.add_argument('--no-restart', action='store_true', help='leave Steam stopped at the end')
+    ap.add_argument('--collection', default=COLLECTION,
+                    help='Steam collection with all KytyPS5 shortcuts (default %r)' % COLLECTION)
+    ap.add_argument('--no-collection', action='store_true', help='leave Steam collections alone')
     args = ap.parse_args(argv)
 
     games_dir = os.path.abspath(os.path.expanduser(args.dir))
@@ -665,7 +769,7 @@ def main(argv=None):
     if not runner or not os.path.exists(runner):
         raise SystemExit('%s not found (install kytyps5-native-git, or pass --runner)' % args.runner)
 
-    user, vdf_path = find_shortcuts_vdf(args.steam_user)
+    user, vdf_path = find_shortcuts_vdf(args.steam_user, create=not (args.dry_run or args.list))
     grid_dir = os.path.join(os.path.dirname(vdf_path), 'grid')
     top, entries = vdf_read(vdf_path)
     state = {}
@@ -745,6 +849,20 @@ def main(argv=None):
             add_addcont(path, labels)
             print('  a %s add-ons registered in %s: %s' % (title, path, ' '.join(labels)))
 
+    coll_path = coll = None
+    if not args.no_collection and args.collection.strip():
+        coll_path = collection_file(vdf_path)
+        coll_data, coll_idx, coll = collection_read(coll_path, args.collection.strip())
+        if coll is None:
+            print('  ! no Steam cloud storage yet (%s): start Steam once, then run this again '
+                  'for the %r collection' % (coll_path, args.collection))
+        else:
+            ids = [entry_appid(e) for _, e in kyty]
+            have = sum(1 for a in ids if a in coll['added'])
+            print('collection %r: %d of %d KytyPS5 shortcut%s in it%s'
+                  % (coll['name'], have, len(ids), '' if len(ids) == 1 else 's',
+                     '' if coll_idx is not None else ' (new collection)'))
+
     if args.list:
         return 0
     if not games and not gone:
@@ -757,6 +875,13 @@ def main(argv=None):
         if args.prune or ask('Remove the shortcut %r (its game folder is gone)?' % e.get('appname'),
                              default=False, tty=tty):
             remove.append((idx, e))
+
+    drop_ids = {entry_appid(e) for _, e in remove}
+    keep_ids = [entry_appid(e) for _, e in kyty if entry_appid(e) not in drop_ids]
+    need_coll = False
+    if coll is not None and not args.art_only:
+        _, plus, minus = collection_change(coll, keep_ids, drop_ids)
+        need_coll = bool(plus or minus or todo)
 
     # The artwork does not need Steam stopped, so it is done first: it decides
     # which icon file the shortcut has to name (and an icon field only changes
@@ -783,10 +908,10 @@ def main(argv=None):
                 icon_fixes.append((idx, want))
 
     need_list = bool(todo or remove or icon_fixes) and not args.art_only
-    if args.no_art and not need_list:
+    if args.no_art and not need_list and not need_coll:
         print('\nnothing to do (--no-art, and nothing to add or remove)')
         return 0
-    if not need_list and not (known and not args.no_art):
+    if not need_list and not need_coll and not (known and not args.no_art):
         print('\nnothing to do')
         return 0
 
@@ -803,10 +928,15 @@ def main(argv=None):
             for g in known:
                 print('  * art of %s into %s for appid %d'
                       % (g.dir, grid_dir, entry_appid(by_path[g.path][0][1])))
+        if need_coll:
+            _, plus, minus = collection_change(coll, keep_ids, drop_ids)
+            print('  * collection %r: %d shortcut%s added%s, %d taken out'
+                  % (coll['name'], len(plus) + len(todo), '' if len(plus) + len(todo) == 1 else 's',
+                     ' (%d new)' % len(todo) if todo else '', len(minus)))
         return 0
 
     restart = None
-    if need_list and steam_is_running():
+    if (need_list or need_coll) and steam_is_running():
         if not args.yes:
             if not tty:
                 raise SystemExit('\nSteam is running: close it and run this again, or use --yes '
@@ -860,6 +990,16 @@ def main(argv=None):
             if new_apps:
                 print('\nRemember: in Steam, turn Steam Input OFF for these shortcuts -- with it')
                 print('on, Kyty only sees Steam\'s virtual pad (no motion, haptics, adaptive triggers).')
+        if need_coll:
+            # Read again: Steam writes the file when it exits.
+            data, idx, coll = collection_read(coll_path, coll['name'])
+            if coll is not None:
+                coll, plus, minus = collection_change(
+                    coll, keep_ids + [appid for g, appid, lo in new_apps], drop_ids)
+                if plus or minus:
+                    collection_write(coll_path, data, idx, coll)
+                    print('collection %r: %d added, %d taken out (%d in it)'
+                          % (coll['name'], len(plus), len(minus), len(coll['added'])))
         try:
             with open(os.path.join(games_dir, STATE_NAME), 'w', encoding='utf-8') as fh:
                 json.dump(state, fh, indent=1, sort_keys=True)

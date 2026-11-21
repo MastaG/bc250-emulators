@@ -68,6 +68,7 @@ import urllib.request
 
 HOME = os.path.expanduser('~')
 DEFAULT_DIR = os.path.join(HOME, 'Games/Switch2')
+COLLECTION = 'Switch 2'
 EMULATORS = {'lichii': '/usr/bin/lichii', 'lichii-bc250': '/usr/bin/lichii-bc250'}
 # The variable that sends mesh draws to Lichii's compute fallback (see the docstring).
 MESH_FALLBACK = 'EDEN_NX2_FORCE_MESH_FALLBACK=1'
@@ -145,9 +146,16 @@ def vdf_serialize(members):
     return bytes(out)
 
 
+# What Steam itself writes for a user without non-Steam shortcuts.
+EMPTY_VDF = b'\x00shortcuts\x00\x08\x08'
+
+
 def vdf_read(path):
-    with open(path, 'rb') as fh:
-        data = fh.read()
+    if not os.path.exists(path):
+        data = EMPTY_VDF                      # --dry-run before Steam has one
+    else:
+        with open(path, 'rb') as fh:
+            data = fh.read()
     top, _ = vdf_parse(data)
     if vdf_serialize(list(top.items())) + b'\x08' != data:
         raise SystemExit('%s does not round-trip, refusing to rewrite it' % path)
@@ -166,7 +174,7 @@ def vdf_write(path, top):
     os.replace(tmp, path)
 
 
-def find_shortcuts_vdf():
+def find_shortcuts_vdf(create=True):
     best = None
     for root in sorted({os.path.realpath(os.path.join(HOME, p))
                         for p in ('.local/share/Steam', '.steam/root')}):
@@ -194,9 +202,12 @@ def find_shortcuts_vdf():
                     newest = (m, os.path.join(ud, user, 'config/shortcuts.vdf'))
     if not newest:
         raise SystemExit('no Steam account found -- is Steam installed, and has it run once?')
-    with open(newest[1], 'wb') as fh:
-        fh.write(vdf_serialize([('shortcuts', collections.OrderedDict())]) + b'\x08')
-    print('no shortcuts.vdf yet, started an empty one: %s' % newest[1])
+    if create:
+        with open(newest[1], 'wb') as fh:
+            fh.write(EMPTY_VDF)
+        print('no shortcuts.vdf yet, started an empty one: %s' % newest[1])
+    else:
+        print('no shortcuts.vdf yet, a real run starts an empty one: %s' % newest[1])
     return newest[1]
 
 
@@ -307,6 +318,96 @@ def new_entry(appid, name, game, icon, emulator, env):
     e['sortas'] = ''
     e['tags'] = collections.OrderedDict([('0', TAG)])
     return e
+
+
+# ------------------------------------------------------------- Steam collection
+# Steam keeps its collections in userdata/<id>/config/cloudstorage/cloud-storage-namespace-<n>.json, a
+# list of ["user-collections.<id>", {"key", "timestamp", "value", "version", ...}] whose value is the
+# collection as JSON: {"id", "name", "added": [appid, ...], "removed": [...]}; a shortcut's appid is the
+# unsigned 32-bit one of shortcuts.vdf. An entry written with the "union-collections" conflict
+# resolution (as Steam ROM Manager writes them) is merged with Steam's cloud copy, not replaced by it.
+# Steam must be stopped: it writes the whole file again when it exits.
+
+def collection_file(vdf_path):
+    """The cloud-storage file that holds the collections (namespace 1 unless another one has them)."""
+    folder = os.path.join(os.path.dirname(vdf_path), 'cloudstorage')
+    ns = 1
+    try:
+        with open(os.path.join(folder, 'cloud-storage-namespaces.json'), encoding='utf-8') as fh:
+            for nid, _ in json.load(fh):
+                try:
+                    with open(os.path.join(folder, 'cloud-storage-namespace-%d.json' % int(nid)),
+                              encoding='utf-8') as f2:
+                        if '"user-collections.' in f2.read():
+                            ns = int(nid)
+                            break
+                except OSError:
+                    continue
+    except (OSError, ValueError, TypeError):
+        pass
+    return os.path.join(folder, 'cloud-storage-namespace-%d.json' % ns)
+
+
+def collection_read(path, name):
+    """-> (file entries, index of the collection or None, the collection). The collection is found by
+    its name (any case), so one made by hand in Steam is used too; else a new one is returned.
+    (None, None, None) when Steam has no cloud-storage file yet."""
+    try:
+        with open(path, encoding='utf-8') as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return None, None, None
+    except ValueError as exc:
+        print('  ! %s: %s -- collection left alone' % (path, exc))
+        return None, None, None
+    if not isinstance(data, list):
+        return None, None, None
+    for i, item in enumerate(data):
+        if not (isinstance(item, list) and len(item) == 2 and isinstance(item[1], dict)
+                and str(item[0]).startswith('user-collections.')):
+            continue
+        if item[1].get('is_deleted') or not item[1].get('value'):
+            continue
+        try:
+            coll = json.loads(item[1]['value'])
+        except ValueError:
+            continue
+        if isinstance(coll, dict) and str(coll.get('name', '')).strip().upper() == name.strip().upper():
+            coll['added'] = [int(a) for a in coll.get('added') or []]
+            coll['removed'] = [int(a) for a in coll.get('removed') or []]
+            return data, i, coll
+    cid = 'bc250-' + ''.join('%02x' % b for b in hashlib.md5(name.encode('utf-8')).digest()[:6])
+    return data, None, {'id': cid, 'name': name, 'added': [], 'removed': []}
+
+
+def collection_change(coll, want, drop):
+    """-> (new collection, appids added, appids taken out): every appid of `want` in it, no appid of
+    `drop`; nothing else of the collection is touched (games put in it by hand stay)."""
+    want = [a for a in want if a not in drop]
+    added = [a for a in coll['added'] if a not in drop]
+    plus = [a for a in want if a not in added]
+    minus = [a for a in coll['added'] if a in drop]
+    new = dict(coll, added=added + plus, removed=[a for a in coll['removed'] if a not in want])
+    return new, plus, minus
+
+
+def collection_write(path, data, index, coll):
+    """Write the collection into the cloud-storage file (a copy of the old file next to it)."""
+    now = int(time.time())
+    key = 'user-collections.%s' % coll['id']
+    entry = [key, {'key': key, 'timestamp': now,
+                   'value': json.dumps(coll, separators=(',', ':'), ensure_ascii=False),
+                   'version': str(now), 'conflictResolutionMethod': 'custom',
+                   'strMethodId': 'union-collections'}]
+    shutil.copy2(path, '%s.bak-%s' % (path, time.strftime('%Y-%m-%d-%H%M%S')))
+    if index is None:
+        data.append(entry)
+    else:
+        data[index] = entry
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(data, fh, separators=(',', ':'), ensure_ascii=False)
+    os.replace(tmp, path)
 
 
 # ------------------------------------------------------------------------ steam
@@ -541,6 +642,9 @@ def main():
     ap.add_argument('--prune', action='store_true', help='remove shortcuts of deleted games without asking')
     ap.add_argument('--refresh-art', action='store_true', help='fetch the artwork again, replacing what is there')
     ap.add_argument('--dry-run', action='store_true', help='show what would change, change nothing')
+    ap.add_argument('--collection', default=COLLECTION,
+                    help='Steam collection with all Lichii shortcuts (default %r)' % COLLECTION)
+    ap.add_argument('--no-collection', action='store_true', help='leave Steam collections alone')
     a = ap.parse_args()
     games_dir = os.path.abspath(os.path.expanduser(a.dir))
     emulator = pick_emulator(a.emulator)
@@ -551,7 +655,7 @@ def main():
     if not os.path.exists(emulator):
         print('  ! %s is missing: the shortcuts start it' % emulator)
 
-    vdf = find_shortcuts_vdf()
+    vdf = find_shortcuts_vdf(create=not a.dry_run)
     grid = os.path.join(os.path.dirname(vdf), 'grid')
     os.makedirs(grid, exist_ok=True)
     state_path = os.path.join(games_dir, STATE_NAME)
@@ -651,6 +755,24 @@ def main():
         elif dry:
             print(text + '  [dry run]')
 
+    # Steam collection: every Lichii shortcut (new ones too), none of the removed ones.
+    drop_ids = {int(entries[k].get('appid', 0)) & 0xffffffff for k in remove}
+    keep_ids = [int(e.get('appid', 0)) & 0xffffffff for k, e in entries.items()
+                if entry_game(e) and k not in remove] + [int(e['appid']) & 0xffffffff for e in add]
+    coll = None
+    need_coll = False
+    if not a.no_collection and a.collection.strip():
+        coll_path = collection_file(vdf)
+        _, coll_idx, coll = collection_read(coll_path, a.collection.strip())
+        if coll is None:
+            print('  ! no Steam cloud storage yet (%s): start Steam once, then run this again '
+                  'for the %r collection' % (coll_path, a.collection))
+        else:
+            _, plus, minus = collection_change(coll, keep_ids, drop_ids)
+            need_coll = bool(plus or minus)
+            print('collection %r%s: %d to add, %d to take out'
+                  % (coll['name'], '' if coll_idx is not None else ' (new)', len(plus), len(minus)))
+
     if dry:
         print('dry run: nothing changed')
         return 0
@@ -658,7 +780,7 @@ def main():
     with open(state_path + '.tmp', 'w') as fh:
         json.dump(state, fh, indent=1, sort_keys=True)
     os.replace(state_path + '.tmp', state_path)
-    if not (add or update or remove):
+    if not (add or update or remove or need_coll):
         print('Steam shortcuts are up to date.')
         return 0
 
@@ -680,8 +802,18 @@ def main():
             entries.pop(k, None)
         items = list(entries.values()) + add
         top['shortcuts'] = collections.OrderedDict((str(i), e) for i, e in enumerate(items))
-        vdf_write(vdf, top)
-        print('shortcuts: %d added, %d updated, %d removed' % (len(add), len(update), len(remove)))
+        if add or update or remove:
+            vdf_write(vdf, top)
+            print('shortcuts: %d added, %d updated, %d removed' % (len(add), len(update), len(remove)))
+        if need_coll:
+            # Read again: Steam writes the file when it exits.
+            data, idx, coll = collection_read(coll_path, coll['name'])
+            if coll is not None:
+                coll, plus, minus = collection_change(coll, keep_ids, drop_ids)
+                if plus or minus:
+                    collection_write(coll_path, data, idx, coll)
+                    print('collection %r: %d added, %d taken out (%d in it)'
+                          % (coll['name'], len(plus), len(minus), len(coll['added'])))
     finally:
         if how:
             print('starting Steam again')
