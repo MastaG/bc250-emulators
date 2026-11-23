@@ -2,14 +2,19 @@
 """Add the PS5 games in a folder to Steam as KytyPS5-Native shortcuts.
 
 Every subfolder of the games folder (default ~/Games/PS5) is one game, for
-example ~/Games/PS5/PPSA21564-app0. The name and the artwork come from the game
+example ~/Games/PS5/PPSA21564-app0, and so is every ZArchive of such a folder
+in it (PPSA21564-app0.zar, made with: zarchive PPSA21564-app0 PPSA21564-app0.zar),
+which Kyty plays without unpacking. The name and the artwork come from the game
 itself:
 
   name    sce_sys/param.json -> localizedParameters/<lang>/titleName  (+ " (PS5)")
   art     sce_sys/pic0.png   -> grid/<appid>.png and grid/<appid>_hero.png
           sce_sys/icon0.png  -> grid/<appid>_icon.png (also the shortcut icon)
                               and grid/<appid>p.png when the game has no poster art
-  launch  "/usr/bin/kytyps5-run" "<game folder>" [--keep-steam]
+  launch  "/usr/bin/kytyps5-run" "<game folder or .zar>" [--keep-steam]
+
+The pictures of a .zar are read out of it into ~/.cache/kytyps5-steam-sync
+(again only when the archive changed).
 
 Nothing is done twice: a folder that already has a shortcut keeps that shortcut
 (its artwork is re-copied when the game's own pictures changed) and only new
@@ -68,6 +73,9 @@ DEFAULT_GAMES_DIR = '~/Games/PS5'
 STEAM_UNIT = 'steam-launcher.service'
 RUNNER_NAMES = ('kytyps5-run', 'kytyps5-run.sh')
 ART_NAMES = ('%s.png', '%s_hero.png', '%s_icon.png', '%sp.png')
+# Kyty's own read-only ZArchive reader (in the same package), for the title and the pictures of a .zar game.
+GAMEFS = '/usr/lib/kytyps5-native/tools/upscaler-scan/kyty_upscaler_scan/gamefs.py'
+META_RE = re.compile(r'(?i)^(param\.json|(icon0|pic0|pic1|pic2)\.(png|jpg|jpeg|webp|dds))$')
 # Add-on labels a game cannot start without (it waits on the loading screen
 # forever). Ghost of Yotei 02.002.000: the 15 catalogue labels the beta fork's
 # own launcher registers (beta/installed-runtime-selector.sh), licences only.
@@ -650,18 +658,112 @@ def install_image(src, dst):
     return 'converted'
 
 
+def is_zar(path):
+    return path.lower().endswith('.zar') and os.path.isfile(path)
+
+
+def game_present(path):
+    """A shortcut's game is still there: its folder, or its .zar."""
+    return bool(path) and (os.path.isdir(path) or is_zar(path))
+
+
+_gamefs = None
+
+
+def gamefs():
+    """Kyty's ZArchive reader, loaded from its file (it needs only the standard library)."""
+    global _gamefs
+    if _gamefs is None:
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader('kyty_gamefs', GAMEFS)
+        spec = importlib.util.spec_from_loader('kyty_gamefs', loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        _gamefs = mod
+    return _gamefs
+
+
+def zar_meta(zar):
+    """Read the game's sce_sys/param.json and pictures out of a .zar into a cache folder
+    (~/.cache/kytyps5-steam-sync/<archive name>-<hash of its path>) and return that folder,
+    with has_eboot. The game root inside the archive is found the way Kyty finds it: the
+    shallowest eboot.bin with sce_sys/param.json beside it. Read again only when the
+    archive's size or time changed. -> (folder or None, has_eboot)"""
+    real = os.path.realpath(zar)
+    st = os.stat(real)
+    stamp = '%d %d' % (st.st_size, st.st_mtime_ns)
+    base = os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache')
+    folder = os.path.join(base, 'kytyps5-steam-sync', '%s-%s' % (
+        os.path.basename(real)[:-4], hashlib.md5(real.encode('utf-8', 'surrogateescape')).hexdigest()[:8]))
+    stamp_file = os.path.join(folder, '.stamp')
+    try:
+        with open(stamp_file) as fh:
+            old = fh.read().split('\n')
+        if old[0] == stamp:
+            return folder, old[1:2] == ['eboot']
+    except OSError:
+        pass
+    try:
+        archive = gamefs().Zar(real)
+    except Exception as exc:                       # noqa: BLE001 - a broken archive is skipped, not fatal
+        print('  ! %s: cannot read the archive (%s: %s)' % (zar, type(exc).__name__, exc))
+        return None, False
+    try:
+        files = [p for p, is_file in archive.paths() if is_file]
+        boots = sorted((p for p in files if p.rsplit('/', 1)[-1].lower() == 'eboot.bin'),
+                       key=lambda p: p.count('/'))
+        prefix = None
+        for b in boots:
+            pre = b.rsplit('/', 1)[0] + '/' if '/' in b else ''
+            if archive.lookup(pre + 'sce_sys/param.json'):
+                prefix = pre
+                break
+        if prefix is None:                           # no game root: use the top level, if anything is there
+            prefix = ''
+        if os.path.isdir(folder):
+            shutil.rmtree(folder)
+        os.makedirs(os.path.join(folder, 'sce_sys'))
+        for p in files:
+            if not p.startswith(prefix + 'sce_sys/') or '/' in p[len(prefix + 'sce_sys/'):]:
+                continue
+            name = p.rsplit('/', 1)[-1]
+            if META_RE.match(name):
+                with open(os.path.join(folder, 'sce_sys', name), 'wb') as fh:
+                    fh.write(archive.read_node(archive.lookup(p)[0]))
+        has_eboot = bool(archive.lookup(prefix + 'eboot.bin'))
+    except Exception as exc:                       # noqa: BLE001
+        print('  ! %s: cannot read the archive (%s: %s)' % (zar, type(exc).__name__, exc))
+        return None, False
+    finally:
+        archive.close()
+    with open(stamp_file, 'w') as fh:
+        fh.write(stamp + ('\neboot' if has_eboot else '\n'))
+    return folder, has_eboot
+
+
 class Game(object):
-    """One PS5 game folder; its name and its art come from what is inside it."""
+    """One PS5 game: a folder, or a ZArchive (.zar) of one. Its name and its art come
+    from what is inside it; for a .zar they are read out of it into a cache folder (root)."""
 
     def __init__(self, path, lang=None):
         self.dir = path
         self.path = os.path.realpath(path)
-        self.title_id = os.path.basename(self.path)
+        self.zar = is_zar(path)
+        name = os.path.basename(self.path)
+        self.title_id = name[:-4] if self.zar else name
+        self.root, self.has_eboot = zar_meta(path) if self.zar else (path, None)
         self.param = self._param()
         self.lang, self.title = self._title(lang)
 
+    def start_dir(self):
+        """Steam's StartDir: the folder (for a .zar, the folder it lies in)."""
+        return os.path.dirname(self.dir) if self.zar else self.dir
+
     def _param(self):
-        p = os.path.join(self.dir, 'sce_sys/param.json')
+        if not self.root:
+            return {}
+        p = os.path.join(self.root, 'sce_sys/param.json')
         if os.path.isfile(p):
             try:
                 with open(p, encoding='utf-8', errors='replace') as fh:
@@ -685,6 +787,8 @@ class Game(object):
         return (self.title + suffix)[:120]
 
     def looks_installed(self):
+        if self.zar:
+            return bool(self.param) or bool(self.has_eboot)
         return bool(self.param) or os.path.isfile(os.path.join(self.dir, 'eboot.bin'))
 
     def images(self):
@@ -693,7 +797,9 @@ class Game(object):
             return self._images
         found = []
         for sub in ('sce_sys', '.'):
-            d = os.path.join(self.dir, sub)
+            if not self.root:
+                break
+            d = os.path.join(self.root, sub)
             if os.path.isdir(d):
                 found += [os.path.join(d, f) for f in sorted(os.listdir(d))
                           if re.match(r'(?i)^(icon0|pic0|pic1|pic2)\.(png|jpg|jpeg|webp|dds)$', f)]
@@ -779,7 +885,8 @@ def sync_art(appid, game, grid_dir, state, force=False, say=print):
         except Exception as exc:
             say('    ! %s: %s (%s)' % (name, type(exc).__name__, exc))
             continue
-        written.append((how, name, os.path.relpath(src, game.dir)))
+        written.append((how, name, os.path.relpath(src, game.root) if not game.zar
+                        else os.path.basename(game.dir) + ':sce_sys/' + os.path.basename(src)))
         keep.append(name)
     made = set(rec.get('files') or [])
     if rec.get('appid'):
@@ -828,8 +935,9 @@ def is_kyty_entry(entry):
 
 
 def entry_game_path(entry):
-    """The game folder a kytyps5-run shortcut starts, out of its launch options."""
-    lo = unquote(entry.get('LaunchOptions', ''))
+    """The game folder (or .zar) a kytyps5-run shortcut starts, out of its launch options.
+    Split as they are: shlex takes the quotes off a path with spaces in it."""
+    lo = entry.get('LaunchOptions', '') or ''
     try:
         toks = shlex.split(lo)
     except ValueError:
@@ -840,13 +948,31 @@ def entry_game_path(entry):
     return None
 
 
-def new_entry(appid, appname, runner, game_path, keep_steam, icon_path):
+def moved_options(entry, game):
+    """The shortcut's launch options with its game path replaced by game's (the rest, such as
+    --keep-steam or --console-language, stays as it was)."""
+    lo = entry.get('LaunchOptions', '') or ''
+    try:
+        toks = shlex.split(lo)
+    except ValueError:
+        toks = lo.split()
+    out, done = [], False
+    for tok in toks:
+        if not done and (tok.startswith(('/', '~', '.')) or tok.lower().endswith('.zar')):
+            out.append(quote(game.dir))
+            done = True
+        else:
+            out.append(shlex.quote(tok))
+    return ' '.join(out) if done else quote(game.dir) + (' ' + ' '.join(out) if out else '')
+
+
+def new_entry(appid, appname, runner, game_path, keep_steam, icon_path, start_dir=None):
     """Same fields in the same order as the hand made ASTRO BOT shortcut."""
     e = collections.OrderedDict()
     e['appid'] = appid - 0x100000000 if appid >= 0x80000000 else appid
     e['appname'] = appname
     e['exe'] = quote(runner)
-    e['StartDir'] = quote(game_path)
+    e['StartDir'] = quote(start_dir or game_path)
     e['icon'] = icon_path
     e['ShortcutPath'] = ''
     e['LaunchOptions'] = quote(game_path) + (' --keep-steam' if keep_steam else '')
@@ -1006,7 +1132,7 @@ def main(argv=None):
     games, skipped = [], []
     for name in sorted(os.listdir(games_dir)):
         path = os.path.join(games_dir, name)
-        if not os.path.isdir(path) or name.startswith('.'):
+        if name.startswith('.') or not (os.path.isdir(path) or is_zar(path)):
             continue
         game = Game(path, args.lang)
         if game.looks_installed():
@@ -1035,11 +1161,24 @@ def main(argv=None):
     known = [g for g in games if by_path.get(g.path)]
     matched = {id(e) for g in known for _, e in by_path[g.path]}
     gone = [(idx, e) for idx, e in kyty if id(e) not in matched
-            and inside(entry_game_path(e)) and not os.path.isdir(entry_game_path(e))]
+            and inside(entry_game_path(e)) and not game_present(entry_game_path(e))]
     elsewhere = [(idx, e) for idx, e in kyty if id(e) not in matched
                  and not inside(entry_game_path(e))]
     if args.add_self:
         gone, elsewhere = [], []
+
+    # A game folder swapped for its .zar (or the .zar for the folder again): its shortcut moves along,
+    # keeping its appid, play time and Steam settings (Steam Input off), instead of a new one.
+    moves = []
+    for g in list(todo):
+        other = g.path[:-4] if g.zar else g.path + '.zar'
+        row = next((r for r in gone if os.path.realpath(entry_game_path(r[1])) == other), None)
+        if row:
+            moves.append((row[0], row[1], g))
+            gone.remove(row)
+            todo.remove(g)
+            known.append(g)
+            by_path[g.path] = [row]
 
     print('games   %s (%d game folder%s)' % (games_dir, len(games), '' if len(games) == 1 else 's'))
     print('steam   %s (userdata %s, %d shortcut%s)'
@@ -1053,6 +1192,8 @@ def main(argv=None):
                                            entry_appid(entry), note))
     for g in todo:
         print('  + %-32s %s' % (g.appname(args.name_suffix)[:32], g.dir))
+    for idx, e, g in moves:
+        print('  > %-32s moves to %s' % (e.get('appname', '')[:32], g.dir))
     for name in skipped:
         print('  ! %s: no sce_sys/param.json and no eboot.bin, skipped' % name)
     for idx, e in gone:
@@ -1136,8 +1277,8 @@ def main(argv=None):
                 icon_fixes.append((idx, want))
 
     # Without --add-self the own shortcut doesn't stop Steam by itself: it comes with the next change.
-    need_self = need_self and (args.add_self or bool(todo or remove or icon_fixes) or not steam_is_running())
-    need_list = (bool(todo or remove or icon_fixes) and not args.art_only) or need_self
+    need_self = need_self and (args.add_self or bool(todo or remove or icon_fixes or moves) or not steam_is_running())
+    need_list = (bool(todo or remove or icon_fixes or moves) and not args.art_only) or need_self
     need_coll = need_coll or (need_self and coll is not None)
     if args.no_art and not need_list and not need_coll:
         print('\nnothing to do (--no-art, and nothing to add or remove)')
@@ -1155,6 +1296,8 @@ def main(argv=None):
             print('  - slot %s %r (appid %d) and its artwork' % (idx, e.get('appname'), entry_appid(e)))
         for idx, want in icon_fixes:
             print('  * slot %s icon -> %s' % (idx, want))
+        for idx, e, g in moves:
+            print('  > slot %s %r -> %s' % (idx, e.get('appname'), moved_options(e, g)))
         if need_self:
             print('  %s %r  %s %s' % ('*' if self_idx is not None else '+', SELF_NAME,
                                      self_set['exe'], SELF_OPTION))
@@ -1194,6 +1337,13 @@ def main(argv=None):
         if need_list:
             for idx, want in icon_fixes:
                 entries[idx]['icon'] = want
+            for idx, e, g in moves:
+                old = os.path.realpath(entry_game_path(e))
+                e['LaunchOptions'] = moved_options(e, g)
+                e['StartDir'] = quote(g.start_dir())
+                rec = state.pop(old, None)           # the artwork step may have recorded it under the new path
+                if rec and g.path not in state:
+                    state[g.path] = rec
             for g in todo:
                 lo = quote(g.dir) + (' --keep-steam' if args.keep_steam else '')
                 appid = appid_for(g.appname(args.name_suffix), quote(runner), quote(g.dir),
@@ -1209,7 +1359,7 @@ def main(argv=None):
             for g, appid, lo in new_apps:
                 numbered[str(len(numbered))] = new_entry(
                     appid, g.appname(args.name_suffix), runner, g.dir, args.keep_steam,
-                    shortcut_icon(appid, grid_dir, g) or '')
+                    shortcut_icon(appid, grid_dir, g) or '', g.start_dir())
             if self_new is not None:
                 numbered[str(len(numbered))] = self_entry(self_new, SELF_TOOL, SELF_NAME)
             for g, appid, lo in new_apps:

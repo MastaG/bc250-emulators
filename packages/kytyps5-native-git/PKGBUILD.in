@@ -45,7 +45,8 @@ makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'glslang' 'python' 'pkgconf'
 optdepends=('binutils: kyty-upscaler-scan (the upscaler profile of a game, for HLX and frame generation)'
             'llvm: kyty-upscaler-scan (llvm-mc)'
             'python-numpy: a faster kyty-upscaler-scan'
-            'alsa-utils: a DualSense speaker at full mixer level (amixer)')
+            'alsa-utils: a DualSense speaker at full mixer level (amixer)'
+            'zarchive: pack a game folder into a .zar the emulator and kytyps5-steam-sync read')
 provides=("$_name")
 conflicts=("$_name")
 install=kytyps5-native-git.install

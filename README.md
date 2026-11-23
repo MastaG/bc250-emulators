@@ -355,6 +355,13 @@ changed. When a game's folder is gone, it asks whether to remove that shortcut
 and its artwork; `--prune` removes them all without asking. Run from its Steam
 shortcut ("Sync PS5 games") it always does that.
 
+A ZArchive of a game folder in `~/Games/PS5` counts as a game too: Kyty plays a
+`.zar` without unpacking it, and its name and pictures are read out of the
+archive. Make one with `zarchive` (`sudo pacman -S zarchive`):
+`zarchive PPSA21564-app0 PPSA21564-app0.zar`. When a game folder is replaced by its
+`.zar` (the same name plus `.zar`), or the other way round, the shortcut is kept and
+only points at the other one, so play time and Steam settings stay.
+
 Steam only reads its shortcut list when it starts, so when Steam is running the
 tool asks to stop it, writes the list and starts Steam again (`--yes` skips the
 question). It keeps a backup of the list next to it
