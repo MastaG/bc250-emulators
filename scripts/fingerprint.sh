@@ -33,6 +33,7 @@ case "$COMPONENT" in
                 "$ROOT_DIR"/packages/lichii/lichii-steam-sync \
                 "$ROOT_DIR"/packages/lichii/lichii-steam-sync.install \
                 "$ROOT_DIR"/packages/lichii/lichii-syncer.service \
+                "$ROOT_DIR"/packages/lichii/lichii-wrapper \
                 "$ROOT_DIR"/scripts/build-lichii-package.sh \
                 "$ROOT_DIR"/scripts/resolve-lichii.sh
         } | sha256sum | awk '{print $1}'

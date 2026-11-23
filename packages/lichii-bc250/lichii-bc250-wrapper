@@ -1,5 +1,29 @@
 #!/bin/bash
 # /usr/bin/lichii-bc250 and (as a link) /usr/bin/lichii-bc250-cli: the fork's
 # BC-250 tuning, then the real binary of the same name in /usr/lib/lichii-bc250.
+#
+# In Gaming Mode gamescope shows a fullscreen game's own frames directly
+# (direct scan-out), and the BC-250 can only show frames that are pinned in its
+# 512 MB of VRAM. Once the game has filled that, a frame gamescope must pin or
+# allocate then (the game's menu, Steam's overlay) fails: "drm: flip error:
+# Cannot allocate memory", and gamescope aborts with the game in it. So while
+# the emulator runs, gamescope composites everything (GAMESCOPE_COMPOSITE_FORCE)
+# into buffers it pinned before; the old value comes back when the emulator
+# exits. LICHII_DIRECT_SCANOUT=1 leaves gamescope alone; outside gamescope
+# (the desktop) nothing changes.
 source /usr/lib/lichii-bc250/lichii-bc250-env
-exec "/usr/lib/lichii-bc250/${0##*/}" "$@"
+real=/usr/lib/lichii-bc250/${0##*/}
+
+gs() { DISPLAY=:0 xprop -root "$@" 2>/dev/null; }
+if [[ -z "${LICHII_DIRECT_SCANOUT:-}" ]] && command -v xprop >/dev/null &&
+    gs GAMESCOPE_XWAYLAND_SERVER_ID | grep -q ' = '; then
+    prev=$(gs GAMESCOPE_COMPOSITE_FORCE | sed -n 's/.* = //p')
+    gs -f GAMESCOPE_COMPOSITE_FORCE 32c -set GAMESCOPE_COMPOSITE_FORCE 1
+    "$real" "$@" <&0 &
+    pid=$!
+    trap 'kill -TERM "$pid" 2>/dev/null' TERM INT HUP
+    while wait "$pid"; status=$?; kill -0 "$pid" 2>/dev/null; do :; done
+    gs -f GAMESCOPE_COMPOSITE_FORCE 32c -set GAMESCOPE_COMPOSITE_FORCE "${prev:-0}"
+    exit "$status"
+fi
+exec "$real" "$@"

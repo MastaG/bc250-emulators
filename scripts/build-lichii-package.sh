@@ -27,7 +27,7 @@ fi
 
 rm -rf -- "$BUILD_DIR"
 mkdir -p -- "$BUILD_DIR"
-cp -- "$PKG_DIR"/lichii-steam-sync "$PKG_DIR"/lichii-steam-sync.install "$PKG_DIR"/lichii-syncer.service "$BUILD_DIR/"
+cp -- "$PKG_DIR"/lichii-steam-sync "$PKG_DIR"/lichii-steam-sync.install "$PKG_DIR"/lichii-syncer.service "$PKG_DIR"/lichii-wrapper "$BUILD_DIR/"
 sed -e "s/@LICHII_TAG@/${LICHII_TAG}/" -e "s/@LICHII_COMMIT@/${LICHII_COMMIT}/" \
     -e "s/@LICHII_BUILD@/${LICHII_BUILD}/" -e "s/@PKGREL@/${PKGREL}/" \
     "$PKG_DIR/PKGBUILD.in" > "$BUILD_DIR/PKGBUILD"

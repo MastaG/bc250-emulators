@@ -48,7 +48,7 @@ license=('GPL-3.0-or-later')
 depends=('qt6-base' 'qt6-charts' 'sdl3' 'ffmpeg' 'boost-libs' 'openssl' 'fmt'
          'libusb' 'enet' 'lz4' 'brotli' 'zlib' 'libxkbcommon' 'libglvnd'
          'gcc-libs' 'glibc' 'vulkan-icd-loader' 'libpulse' 'alsa-lib'
-         'hicolor-icon-theme' 'lichii-steam-sync')
+         'hicolor-icon-theme' 'lichii-steam-sync' 'xorg-xprop')
 makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'llvm' 'glslang' 'spirv-tools'
              'spirv-headers' 'qt6-tools' 'boost' 'nlohmann-json' 'nasm' 'pkgconf'
              'mesa' 'libva' 'libvdpau')

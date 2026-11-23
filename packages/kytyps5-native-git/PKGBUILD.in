@@ -39,11 +39,10 @@ license=('GPL-2.0-only')
 depends=('qt6-base' 'vulkan-icd-loader' 'libx11' 'libxext' 'libxcursor' 'libxi'
          'libxfixes' 'libxrandr' 'libxss' 'libxkbcommon' 'wayland' 'libpulse'
          'alsa-lib' 'dbus' 'systemd-libs' 'hicolor-icon-theme'
-         'python' 'python-pillow')
+         'python' 'python-pillow' 'xorg-xprop')
 makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'glslang' 'python' 'pkgconf'
              'wayland-protocols' 'libxtst' 'mesa')
-optdepends=('xorg-xprop: Steam shortcuts through kytyps5-run'
-            'binutils: kyty-upscaler-scan (the upscaler profile of a game, for HLX and frame generation)'
+optdepends=('binutils: kyty-upscaler-scan (the upscaler profile of a game, for HLX and frame generation)'
             'llvm: kyty-upscaler-scan (llvm-mc)'
             'python-numpy: a faster kyty-upscaler-scan'
             'alsa-utils: a DualSense speaker at full mixer level (amixer)')

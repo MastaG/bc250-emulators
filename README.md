@@ -88,6 +88,10 @@ Tips for the BC-250:
   (`EDEN_NX2_NO_MESH=1` is a different switch: it skips mesh draws, which loses geometry.)
 - Lichii needs a lot of memory (Ocarina of Time: ~10 GB plus ~6 GB of GPU memory): use enough swap on a fast SSD,
   not on a USB stick.
+- Gaming Mode: `lichii` and `lichii-bc250` have gamescope composite while they run (`GAMESCOPE_COMPOSITE_FORCE`,
+  set back when the emulator exits). Otherwise gamescope shows the game's frames directly, and those must fit in
+  the BC-250's 512 MB of VRAM: with a game running, opening a menu could fail there ("drm: flip error: Cannot
+  allocate memory") and take gamescope down with the game. `LICHII_DIRECT_SCANOUT=1` (launch option) turns it off.
 
 ## Lichii BC-250 fork (lichii-bc250)
 
@@ -275,8 +279,7 @@ To undo: `sudo systemctl disable --now kyty-lodhw.service` and
   add `/usr/bin/kytyps5-run` as a non-Steam game by hand and give it the game
   folder as launch option: `"/path/to/game"`. Optional: `--keep-steam` after
   the folder keeps Steam running during the game (by default it is unloaded to
-  free 2-3 GB of RAM for large games). It needs `xorg-xprop`:
-  `sudo pacman -S xorg-xprop`.
+  free 2-3 GB of RAM for large games). It uses `xprop` (`xorg-xprop`, installed with the package).
 - **Turn Steam Input off for that shortcut** (its controller settings in Steam).
   With Steam Input on, Kyty sees only Steam's virtual pad: no motion controls,
   haptics, adaptive triggers or controller speaker.

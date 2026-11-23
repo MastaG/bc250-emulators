@@ -9,6 +9,8 @@
 # Split package:
 # - lichii: the emulator (/usr/bin/lichii), the command-line version
 #   (/usr/bin/lichii-cli) and the multiplayer room server (/usr/bin/lichii-room).
+#   /usr/bin/lichii is a wrapper around /usr/lib/lichii/lichii: in Gaming Mode
+#   it has gamescope composite while the emulator runs (lichii-wrapper).
 #   Upstream names the last two eden-cli and eden-room, the names the Eden
 #   emulator installs too; they are renamed so both can be installed.
 # - lichii-steam-sync, our own (arch any): adds the Switch 2 games of a folder
@@ -58,8 +60,10 @@ makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'llvm' 'glslang' 'spirv-tools'
 options=('!lto' '!debug' 'strip')
 source=("$_name::git+https://github.com/zortos293/lichii.git#commit=${_commit}"
         'lichii-steam-sync'
-        'lichii-syncer.service')
+        'lichii-syncer.service'
+        'lichii-wrapper')
 sha256sums=('SKIP'
+            'SKIP'
             'SKIP'
             'SKIP')
 
@@ -110,7 +114,7 @@ package_lichii() {
     depends=('qt6-base' 'qt6-charts' 'sdl3' 'ffmpeg' 'boost-libs' 'openssl' 'fmt'
              'libusb' 'enet' 'lz4' 'brotli' 'zlib' 'libxkbcommon' 'libglvnd'
              'gcc-libs' 'glibc' 'vulkan-icd-loader' 'libpulse' 'alsa-lib'
-             'hicolor-icon-theme' 'lichii-steam-sync')
+             'hicolor-icon-theme' 'lichii-steam-sync' 'xorg-xprop')
     optdepends=('gamemode: Feral GameMode while a game runs')
     conflicts=("$_name-git")
     replaces=('lichii-bc250<1000000')
@@ -119,6 +123,10 @@ package_lichii() {
     # eden-cli / eden-room are also what the Eden emulator installs.
     mv "$pkgdir/usr/bin/eden-cli" "$pkgdir/usr/bin/lichii-cli"
     mv "$pkgdir/usr/bin/eden-room" "$pkgdir/usr/bin/lichii-room"
+    # /usr/bin/lichii is a wrapper (gamescope composites while it runs, see it).
+    install -d "$pkgdir/usr/lib/lichii"
+    mv "$pkgdir/usr/bin/lichii" "$pkgdir/usr/lib/lichii/lichii"
+    install -m755 lichii-wrapper "$pkgdir/usr/bin/lichii"
     install -Dm644 "$_name/LICENSE.txt" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.txt"
     cp -r --no-preserve=ownership "$_name/LICENSES" "$pkgdir/usr/share/licenses/$pkgname/"
 }
