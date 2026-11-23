@@ -36,7 +36,7 @@ What a run does:
      Artwork that is already in Steam's grid folder is left alone (so art you
      picked yourself in Steam stays); --refresh-art fetches it again.
   3. Shortcuts whose game file is gone: asks per shortcut, --prune removes them
-     without asking.
+     without asking. Started from its Steam shortcut it always prunes.
   4. A game that already has a shortcut of another Lichii or Eglantine build
      gets no second one; --migrate points those shortcuts at this emulator and
      keeps their artwork, play time and Steam settings.
@@ -592,7 +592,8 @@ def detach_from_steam(tool, argv):
             cmd += ['-E', '%s=%s' % (name, os.environ[name])]
     subprocess.run(['systemctl', '--user', 'reset-failed', tool + '.service'],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    args = [a for a in argv if a != SELF_OPTION]
+    # From Steam there is no terminal to ask in: shortcuts of games that are gone are removed.
+    args = [a for a in argv if a != SELF_OPTION] + ['--prune']
     os.execvp('systemd-run', cmd + [sys.executable, os.path.realpath(sys.argv[0])] + args)
 
 

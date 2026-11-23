@@ -15,7 +15,8 @@ Nothing is done twice: a folder that already has a shortcut keeps that shortcut
 (its artwork is re-copied when the game's own pictures changed) and only new
 folders are added. For a shortcut whose game folder is gone you are asked
 whether to remove it (and the artwork it had); --prune removes them all
-without asking, and without a terminal they are kept.
+without asking, and without a terminal they are kept. Started from its Steam
+shortcut ("Sync PS5 games") it always prunes.
 
 Steam reads its shortcut list when it starts, so Steam has to be closed while
 this writes it; the script asks to stop it and starts it again afterwards, and
@@ -950,7 +951,7 @@ def main(argv=None):
                          'runs before Steam starts)')
     args = ap.parse_args(argv)
     if args.from_steam:
-        detach_from_steam(SELF_TOOL, sys.argv[1:] if argv is None else list(argv), ['--yes'])
+        detach_from_steam(SELF_TOOL, sys.argv[1:] if argv is None else list(argv), ['--yes', '--prune'])
 
     lock = steam_lock()                      # noqa: F841 (held until exit)
     games_dir = os.path.abspath(os.path.expanduser(args.dir))

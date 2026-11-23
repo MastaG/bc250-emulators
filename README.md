@@ -72,7 +72,8 @@ Steam is closed while the shortcut list is written and started again afterwards.
 - **Sync from Steam:** the script adds a shortcut for itself, **"Sync Switch 2 games"**, so you can run it with its default
   settings from Big Picture / Gaming Mode. Started from Steam it continues in a systemd user unit of its own
   (`journalctl --user -u lichii-steam-sync` shows what it did), closes Steam while it writes and starts it again.
-  When there is nothing new, Steam stays open. The shortcut is added once, when the package is installed;
+  When there is nothing new, Steam stays open. Run from Steam it also removes the shortcuts of games whose file is
+  gone (`--prune`). The shortcut is added once, when the package is installed;
   if you removed it, `lichii-steam-sync --add-self` adds it again. It keeps itself off Steam's "Recent games".
 - **Optional, at every login:** `systemctl --user enable lichii-syncer` makes sure the "Sync Switch 2 games" shortcut is there
   for the Steam account that logged in last, before Steam starts (Gaming Mode and desktop alike). It leaves
@@ -351,7 +352,8 @@ banner and background, `icon0` as the icon and the cover (PS5 `.dds` pictures
 are converted to PNG). Running it again changes nothing for games that already
 have a shortcut, apart from updating their artwork if the game's pictures
 changed. When a game's folder is gone, it asks whether to remove that shortcut
-and its artwork; `--prune` removes them all without asking.
+and its artwork; `--prune` removes them all without asking. Run from its Steam
+shortcut ("Sync PS5 games") it always does that.
 
 Steam only reads its shortcut list when it starts, so when Steam is running the
 tool asks to stop it, writes the list and starts Steam again (`--yes` skips the
