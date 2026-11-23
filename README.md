@@ -305,6 +305,14 @@ To undo: `sudo systemctl disable --now kyty-lodhw.service` and
     have their own `sce_sys/param.json`. It is passed as `--addcont-dir`, the
     same as the launcher's add-ons folder setting. Nothing else is needed: the
     shortcut stays the same.
+  - **For a game packed as a `.zar`**, which cannot hold that folder: keep the
+    `addcont` folder in a folder of the archive's name without `.zar`, next to
+    it (`~/Games/PS5/PPSA26344-app0/addcont/` beside
+    `~/Games/PS5/PPSA26344-app0.zar`; that folder holds nothing else).
+    `kytyps5-steam-sync` adds `--addcont-dir=<that addcont folder>` to the
+    shortcut's launch options, and `kytyps5-run` passes it on as
+    `--addcont-dir`. The option goes again at the next sync once the folder is
+    gone.
   - **A licence list**, `~/.config/KytyPS5-Native/addcont/<title id>`: one
     add-on label per line (`<label>`, or `<label>=<folder with its data>`), a
     `#` starts a comment. Each line is passed as `--addcont`.
@@ -360,7 +368,12 @@ A ZArchive of a game folder in `~/Games/PS5` counts as a game too: Kyty plays a
 archive. Make one with `zarchive` (`sudo pacman -S zarchive`):
 `zarchive PPSA21564-app0 PPSA21564-app0.zar`. When a game folder is replaced by its
 `.zar` (the same name plus `.zar`), or the other way round, the shortcut is kept and
-only points at the other one, so play time and Steam settings stay.
+only points at the other one, so play time and Steam settings stay. A dumped game is
+stored unpacked, so the archive is often much smaller: Gran Turismo 7 went from
+303 GB to 163 GB, ASTRO BOT from 149 GB to 49 GB. A game whose add-ons sit
+in its folder's `addcont` keeps them in a folder of the same name beside the `.zar`
+(see the add-ons item above). Pack the game without its `addcont` folder (move it out
+first): inside the archive, `kytyps5-run` cannot pass it on.
 
 Steam only reads its shortcut list when it starts, so when Steam is running the
 tool asks to stop it, writes the list and starts Steam again (`--yes` skips the

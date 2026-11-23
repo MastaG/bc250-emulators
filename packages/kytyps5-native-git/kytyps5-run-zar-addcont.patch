@@ -1,0 +1,54 @@
+kytyps5-run.sh: --addcont-dir=<folder> in the launch options
+
+A game packed as a .zar cannot carry an addcont folder the runner sees
+(<game>/addcont is inside the archive file). Ghost of Yotei needs its
+add-on packages to get past its loading screen, so a folder of add-on
+packages can be named in the shortcut's launch options instead:
+--addcont-dir=<folder>, passed to the emulator as --addcont-dir like
+<game folder>/addcont. kytyps5-steam-sync writes it for a .zar whose
+folder of the same name (without .zar) beside it has an addcont folder.
+Applied only while upstream's runner has no --addcont-dir=.
+
+--- a/tools/kytyps5-native/kytyps5-run.sh
++++ b/tools/kytyps5-native/kytyps5-run.sh
+@@ -1,6 +1,7 @@
+ #!/bin/bash
+ # Plays a PS5 game in KytyPS5-Native from a Steam shortcut (the Decky plugin adds them).
+ # Usage (Steam launch options): kytyps5-run.sh "<game folder or .zar>" [--keep-steam] [--console-language=<0-29>]
++#                                [--addcont-dir=<folder>]
+ #
+ # By default Steam is unloaded while the game runs: Steam and its web helpers hold 2-3 GB of RAM that a
+ # big PS5 game needs (Gran Turismo 7 uses ~12.6 of 14.8 GB). It comes back on any exit. --keep-steam
+@@ -12,7 +13,9 @@
+ # <label> or <label>=<folder with its data>; a # starts a comment. A game can wait for one of them
+ # forever (Ghost of Yotei stays on a black loading screen without its two).
+ # <game folder>/addcont: a folder of add-on packages (each with its sce_sys/param.json), passed as
+-# --addcont-dir, the way the launcher's add-ons folder setting does.
++# --addcont-dir, the way the launcher's add-ons folder setting does. A .zar cannot hold one the emulator
++# sees: --addcont-dir=<folder> names it (kytyps5-steam-sync writes the addcont folder of a folder named
++# as the .zar without .zar, beside it).
+ # ~/.config/KytyPS5-Native/present-mode/<title id> holds the game's present mode while it is not Kyty's
+ # default (Mailbox): the word Fifo or Immediate on its first line. The plugin's game page writes it.
+ # Saves: ~/.local/share/KytyPS5-Native/data. Log: ~/.local/share/KytyPS5-Native/logs/<title id>.log
+@@ -22,9 +25,11 @@
+ GAME=${1:?game folder}
+ KEEP_STEAM=0
+ LANGUAGE_ARGS=
++ADDCONT_DIRS=()
+ for arg in "${@:2}"; do
+ 	case $arg in
+ 	--keep-steam) KEEP_STEAM=1 ;;
++	--addcont-dir=*) ADDCONT_DIRS+=("${arg#*=}") ;;
+ 	--console-language=*) LANGUAGE_ARGS="--console-language ${arg#*=}" ;;
+ 	esac
+ done
+@@ -49,6 +54,9 @@
+ 	done < "$CONFIG/addcont/$TITLE"
+ fi
+ [ -d "$GAME/addcont" ] && ADDCONT_ARGS+=(--addcont-dir "$GAME/addcont")
++for dir in "${ADDCONT_DIRS[@]}"; do
++	[ -d "$dir" ] && ADDCONT_ARGS+=(--addcont-dir "$dir")
++done
+ # Patches switched on in the Decky plugin. Kyty stops a game given patches for another version of
+ # it (the game was updated since): then they are left out.
+ PATCH_ARGS=()

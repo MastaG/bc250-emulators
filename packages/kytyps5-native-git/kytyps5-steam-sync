@@ -42,7 +42,11 @@ labels are added to ~/.config/KytyPS5-Native/addcont/<title id>, which
 kytyps5-run passes to the emulator as --addcont. Lines already in that file
 are kept. Add-on packages go in an addcont folder inside the game folder
 (each with its own sce_sys/param.json): kytyps5-run passes that folder as
---addcont-dir by itself, so the shortcut needs nothing for it.
+--addcont-dir by itself, so the shortcut needs nothing for it. A .zar cannot
+hold such a folder: put it in a folder named as the archive without .zar,
+beside it (PPSA26344-app0/addcont next to PPSA26344-app0.zar), and the
+shortcut gets --addcont-dir=<that addcont folder> (kytyps5-run passes it on);
+the option goes again when that folder does.
 
 After adding: turn Steam Input OFF for the new shortcuts in Steam, or Kyty only
 sees Steam's virtual pad (no motion controls, haptics, adaptive triggers).
@@ -966,6 +970,39 @@ def moved_options(entry, game):
     return ' '.join(out) if done else quote(game.dir) + (' ' + ' '.join(out) if out else '')
 
 
+def zar_addcont(game):
+    """A .zar's add-on packages: the addcont folder of the folder beside it that is named as the
+    archive without .zar (PPSA26344-app0/addcont next to PPSA26344-app0.zar), else None. A game
+    folder's own addcont needs no option: kytyps5-run finds it there."""
+    if not game.zar:
+        return None
+    folder = os.path.join(game.dir[:-4], 'addcont')
+    return folder if os.path.isdir(folder) else None
+
+
+def with_addcont(lo, game):
+    """Launch options lo with --addcont-dir=<folder> as zar_addcont(game) wants it: added, changed
+    or taken out. lo itself when it is right already, so a shortcut is only rewritten for a change."""
+    try:
+        toks = shlex.split(lo)
+    except ValueError:
+        toks = lo.split()
+    folder = zar_addcont(game)
+    want = ['--addcont-dir=' + folder] if folder else []
+    if [t for t in toks if t.startswith('--addcont-dir=')] == want:
+        return lo
+    out = []
+    for tok in toks:
+        if tok.startswith('--addcont-dir='):
+            continue
+        if tok.startswith(('/', '~', '.')) or tok.lower().endswith('.zar'):
+            out.append(quote(os.path.abspath(os.path.expanduser(tok))))
+        else:
+            out.append(shlex.quote(tok))
+    out += [quote(w) for w in want]
+    return ' '.join(out)
+
+
 def new_entry(appid, appname, runner, game_path, keep_steam, icon_path, start_dir=None):
     """Same fields in the same order as the hand made ASTRO BOT shortcut."""
     e = collections.OrderedDict()
@@ -1137,7 +1174,7 @@ def main(argv=None):
         game = Game(path, args.lang)
         if game.looks_installed():
             games.append(game)
-        else:
+        elif not (os.path.isdir(path) and is_zar(path + '.zar')):   # a .zar's add-on folder is no game
             skipped.append(name)
 
     if args.add_self:
@@ -1276,9 +1313,17 @@ def main(argv=None):
             if want and e.get('icon') != want and (args.dry_run or os.path.isfile(want)):
                 icon_fixes.append((idx, want))
 
+    # A .zar's add-on folder beside it, in the launch options (or out again once that folder is gone).
+    addcont_fixes = []
+    for g in known:
+        idx, e = by_path[g.path][0]
+        want = with_addcont(e.get('LaunchOptions', '') or '', g)
+        if want != (e.get('LaunchOptions', '') or ''):
+            addcont_fixes.append((idx, e, want))
+
     # Without --add-self the own shortcut doesn't stop Steam by itself: it comes with the next change.
-    need_self = need_self and (args.add_self or bool(todo or remove or icon_fixes or moves) or not steam_is_running())
-    need_list = (bool(todo or remove or icon_fixes or moves) and not args.art_only) or need_self
+    need_self = need_self and (args.add_self or bool(todo or remove or icon_fixes or moves or addcont_fixes) or not steam_is_running())
+    need_list = (bool(todo or remove or icon_fixes or moves or addcont_fixes) and not args.art_only) or need_self
     need_coll = need_coll or (need_self and coll is not None)
     if args.no_art and not need_list and not need_coll:
         print('\nnothing to do (--no-art, and nothing to add or remove)')
@@ -1291,13 +1336,15 @@ def main(argv=None):
         print('\ndry run, nothing written:')
         for g in todo:
             print('  + %r  %s %s' % (g.appname(args.name_suffix), runner,
-                                     quote(g.dir) + (' --keep-steam' if args.keep_steam else '')))
+                                     with_addcont(quote(g.dir) + (' --keep-steam' if args.keep_steam else ''), g)))
         for idx, e in remove:
             print('  - slot %s %r (appid %d) and its artwork' % (idx, e.get('appname'), entry_appid(e)))
         for idx, want in icon_fixes:
             print('  * slot %s icon -> %s' % (idx, want))
         for idx, e, g in moves:
-            print('  > slot %s %r -> %s' % (idx, e.get('appname'), moved_options(e, g)))
+            print('  > slot %s %r -> %s' % (idx, e.get('appname'), with_addcont(moved_options(e, g), g)))
+        for idx, e, want in addcont_fixes:
+            print('  a slot %s %r -> %s' % (idx, e.get('appname'), want))
         if need_self:
             print('  %s %r  %s %s' % ('*' if self_idx is not None else '+', SELF_NAME,
                                      self_set['exe'], SELF_OPTION))
@@ -1339,13 +1386,16 @@ def main(argv=None):
                 entries[idx]['icon'] = want
             for idx, e, g in moves:
                 old = os.path.realpath(entry_game_path(e))
-                e['LaunchOptions'] = moved_options(e, g)
+                e['LaunchOptions'] = with_addcont(moved_options(e, g), g)
                 e['StartDir'] = quote(g.start_dir())
                 rec = state.pop(old, None)           # the artwork step may have recorded it under the new path
                 if rec and g.path not in state:
                     state[g.path] = rec
+            for idx, e, want in addcont_fixes:
+                e['LaunchOptions'] = want
+                print('  a %-32s %s' % (e.get('appname', '')[:32], want))
             for g in todo:
-                lo = quote(g.dir) + (' --keep-steam' if args.keep_steam else '')
+                lo = with_addcont(quote(g.dir) + (' --keep-steam' if args.keep_steam else ''), g)
                 appid = appid_for(g.appname(args.name_suffix), quote(runner), quote(g.dir),
                                   lo, taken)
                 if not args.no_art and not os.path.isdir(grid_dir):
@@ -1360,6 +1410,7 @@ def main(argv=None):
                 numbered[str(len(numbered))] = new_entry(
                     appid, g.appname(args.name_suffix), runner, g.dir, args.keep_steam,
                     shortcut_icon(appid, grid_dir, g) or '', g.start_dir())
+                numbered[str(len(numbered) - 1)]['LaunchOptions'] = lo
             if self_new is not None:
                 numbered[str(len(numbered))] = self_entry(self_new, SELF_TOOL, SELF_NAME)
             for g, appid, lo in new_apps:

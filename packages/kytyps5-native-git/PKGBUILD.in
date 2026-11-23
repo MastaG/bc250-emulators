@@ -59,8 +59,10 @@ source=("$_name::git+https://github.com/dmorazasanchez/KytyPS5-Native-beta.git#c
         'kytyps5-steam-sync'
         'kytyps5-native-syncer.service'
         'kytyps5-run-addcont.patch'
-        'kytyps5-run-env.patch')
+        'kytyps5-run-env.patch'
+        'kytyps5-run-zar-addcont.patch')
 sha256sums=('SKIP'
+            'SKIP'
             'SKIP'
             'SKIP'
             'SKIP'
@@ -84,6 +86,11 @@ prepare() {
     # it itself (superkeka 0911e10, our #32; the add-ons file since 9c0c819).
     if ! grep -q addcont-dir tools/kytyps5-native/kytyps5-run.sh; then
         git apply "$srcdir/kytyps5-run-addcont.patch"
+    fi
+    # A folder of add-on packages named in the launch options (--addcont-dir=):
+    # what kytyps5-steam-sync writes for a .zar, which cannot hold its addcont.
+    if ! grep -q 'addcont-dir=' tools/kytyps5-native/kytyps5-run.sh; then
+        git apply "$srcdir/kytyps5-run-zar-addcont.patch"
     fi
     # Our own: per-game variables from ~/.config/KytyPS5-Native/env/<title id>,
     # read after the runner's systemd-run detach (which drops the environment).
