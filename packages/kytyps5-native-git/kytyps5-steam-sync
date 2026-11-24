@@ -1302,8 +1302,12 @@ def main(argv=None):
     if args.list:
         return 0
     if not games and not gone and not need_self:
-        print('\nno game folders here and no shortcut of them to clean up')
-        return 0
+        # The login unit (--ensure-self) with its shortcut in place still puts the shortcuts in the collection
+        # (an account without a collections file got none before).
+        ids = [entry_appid(e) for _, e in kyty] + ([entry_appid(entries[self_idx])] if self_idx is not None else [])
+        if coll is None or args.art_only or not collection_change(coll, ids, set())[1]:
+            print('\nno game folders here and no shortcut of them to clean up')
+            return 0
 
     tty = sys.stdin.isatty()
     remove = []
