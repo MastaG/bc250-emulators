@@ -387,12 +387,13 @@ def collection_file(vdf_path):
 def collection_read(path, name):
     """-> (file entries, index of the collection or None, the collection). The collection is found by
     its name (any case), so one made by hand in Steam is used too; else a new one is returned.
-    (None, None, None) when Steam has no cloud-storage file yet."""
+    An account that never had a collection may have no cloud-storage file yet: then the entries are an
+    empty list, and collection_write makes the file. (None, None, None) when the file can't be used."""
     try:
         with open(path, encoding='utf-8') as fh:
             data = json.load(fh)
     except FileNotFoundError:
-        return None, None, None
+        data = []
     except ValueError as exc:
         print('  ! %s: %s -- collection left alone' % (path, exc))
         return None, None, None
@@ -427,6 +428,34 @@ def collection_change(coll, want, drop):
     return new, plus, minus
 
 
+def namespace_register(path):
+    """Make the cloud-storage folder and list the namespace of `path` in cloud-storage-namespaces.json
+    (a list of [namespace, version]), for an account whose Steam made neither yet. Version "0": nothing of
+    it synced, so Steam merges its cloud copy in when it starts (the entry is union-collections)."""
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    m = re.search(r'cloud-storage-namespace-(\d+)\.json$', path)
+    if not m:
+        return
+    ns = int(m.group(1))
+    reg = os.path.join(folder, 'cloud-storage-namespaces.json')
+    try:
+        with open(reg, encoding='utf-8') as fh:
+            known = json.load(fh)
+        if not isinstance(known, list):
+            return                                  # a format we don't know: leave it to Steam
+    except FileNotFoundError:
+        known = []
+    except ValueError:
+        return
+    if any(isinstance(k, list) and k and str(k[0]) == str(ns) for k in known):
+        return
+    known.append([ns, '0'])
+    with open(reg + '.tmp', 'w', encoding='utf-8') as fh:
+        json.dump(known, fh, separators=(',', ':'))
+    os.replace(reg + '.tmp', reg)
+
+
 def collection_write(path, data, index, coll):
     """Write the collection into the cloud-storage file (a copy of the old file next to it)."""
     now = int(time.time())
@@ -435,7 +464,10 @@ def collection_write(path, data, index, coll):
                    'value': json.dumps(coll, separators=(',', ':'), ensure_ascii=False),
                    'version': str(now), 'conflictResolutionMethod': 'custom',
                    'strMethodId': 'union-collections'}]
-    shutil.copy2(path, '%s.bak-%s' % (path, time.strftime('%Y-%m-%d-%H%M%S')))
+    if os.path.exists(path):
+        shutil.copy2(path, '%s.bak-%s' % (path, time.strftime('%Y-%m-%d-%H%M%S')))
+    else:
+        namespace_register(path)
     if index is None:
         data.append(entry)
     else:
