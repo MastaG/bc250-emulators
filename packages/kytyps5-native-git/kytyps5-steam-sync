@@ -206,12 +206,26 @@ def unquote(value):
 
 
 # ------------------------------------------------------------- Steam collection
-# Steam keeps its collections in userdata/<id>/config/cloudstorage/cloud-storage-namespace-<n>.json, a
-# list of ["user-collections.<id>", {"key", "timestamp", "value", "version", ...}] whose value is the
-# collection as JSON: {"id", "name", "added": [appid, ...], "removed": [...]}; a shortcut's appid is the
-# unsigned 32-bit one of shortcuts.vdf. An entry written with the "union-collections" conflict
-# resolution (as Steam ROM Manager writes them) is merged with Steam's cloud copy, not replaced by it.
-# Steam must be stopped: it writes the whole file again when it exits.
+# A Steam collection has two halves (the client's ToStorageFormat: roamingData + localData):
+#  - its definition, in Steam Cloud: userdata/<id>/config/cloudstorage/cloud-storage-namespace-<n>.json,
+#    a list of ["user-collections.<id>", {"key", "timestamp", "value", "version"}] whose value is
+#    {"id", "name", "added": [Steam appids], "removed": [...]}. Steam uploads an entry only when its key is
+#    queued in cloud-storage-namespace-<n>.modified.json (a list of keys), and at a later start replaces
+#    every entry the cloud doesn't have; an entry holding non-Steam shortcuts is never kept.
+#  - the non-Steam shortcuts in it, on this machine only: localconfig.vdf, "WebStorage" ->
+#    "user-collections", a JSON map {id: {"id", "added": [shortcut appids], "removed": [...]}}.
+# A definition written into that file by another program is not reliably uploaded (tested 2026-11-24: one
+# upload out of five tries), so a collection that is new (or whose definition still holds shortcuts, as
+# older versions of this script wrote them) is made by Steam itself: its name and shortcuts are queued in
+# ~/.local/state/bc250-steam-collections.json and `<this script> --apply-collections` (a transient user
+# unit) waits for Steam and makes it through the client's own collectionStore, over the CEF debugging port
+# that Steam opens on 127.0.0.1:8080 when ~/.local/share/Steam/.cef-enable-remote-debugging exists (Decky
+# uses the same port). Shortcuts of a collection that is already in the cloud go straight into
+# localconfig.vdf, with Steam stopped. A shortcut's appid is the unsigned 32-bit one of shortcuts.vdf,
+# always >= 0x80000000. Steam must be stopped for the file writes: it writes both files on exit.
+
+SHORTCUT_BIT = 0x80000000
+
 
 def collection_file(vdf_path):
     """The cloud-storage file that holds the collections (namespace 1 unless another one has them)."""
@@ -233,11 +247,71 @@ def collection_file(vdf_path):
     return os.path.join(folder, 'cloud-storage-namespace-%d.json' % ns)
 
 
+def _localconfig(path):
+    """localconfig.vdf of the account whose cloud-storage file is `path`."""
+    return os.path.join(os.path.dirname(os.path.dirname(path)), 'localconfig.vdf')
+
+
+_LOCAL_RE = re.compile(r'("user-collections"[ \t]+")((?:[^"\\]|\\.)*)(")')
+
+
+def _vdf_unescape(s):
+    return re.sub(r'\\(.)', r'\1', s)
+
+
+def _vdf_escape(s):
+    return s.replace('\\', '\\\\').replace('"', '\\"')
+
+
+def _local_read(path):
+    """-> (localconfig.vdf text or None, its user-collections map)."""
+    try:
+        with open(_localconfig(path), encoding='utf-8') as fh:
+            text = fh.read()
+    except OSError:
+        return None, {}
+    m = _LOCAL_RE.search(text)
+    if not m:
+        return text, {}
+    try:
+        local = json.loads(_vdf_unescape(m.group(2)))
+    except ValueError:
+        return text, {}
+    return text, local if isinstance(local, dict) else {}
+
+
+def _local_write(path, text, local):
+    """Put the user-collections map into localconfig.vdf (into its WebStorage block, made when missing)."""
+    value = _vdf_escape(json.dumps(local, separators=(',', ':')))
+    m = _LOCAL_RE.search(text)
+    if m:
+        text = text[:m.start(2)] + value + text[m.end(2):]
+    else:
+        w = re.search(r'\n([ \t]*)"WebStorage"[ \t]*\n[ \t]*\{[ \t]*\n', text)
+        if w:
+            ind = w.group(1) + '\t'
+            text = text[:w.end()] + '%s"user-collections"\t\t"%s"\n' % (ind, value) + text[w.end():]
+        else:
+            top = re.search(r'"UserLocalConfigStore"[ \t]*\n[ \t]*\{[ \t]*\n', text)
+            if not top:
+                raise ValueError('no UserLocalConfigStore block')
+            text = (text[:top.end()] + '\t"WebStorage"\n\t{\n\t\t"user-collections"\t\t"%s"\n\t}\n' % value
+                    + text[top.end():])
+    lp = _localconfig(path)
+    shutil.copy2(lp, lp + '.bak-bc250')             # one copy, replaced each time
+    with open(lp + '.tmp', 'w', encoding='utf-8') as fh:
+        fh.write(text)
+    os.replace(lp + '.tmp', lp)
+
+
 def collection_read(path, name):
-    """-> (file entries, index of the collection or None, the collection). The collection is found by
-    its name (any case), so one made by hand in Steam is used too; else a new one is returned.
-    An account that never had a collection may have no cloud-storage file yet: then the entries are an
-    empty list, and collection_write makes the file. (None, None, None) when the file can't be used."""
+    """-> (file entries, index of the definition or None, the collection). The collection is found by
+    its name (any case), so one made by hand in Steam (or by Steam ROM Manager) is used too; else a new
+    one is returned. Its 'added'/'removed' are the shortcuts in it on this machine (localconfig.vdf).
+    When the definition is missing from the cloud file, or still holds shortcuts (written by an older
+    version of this script), 'added' is empty, so that a caller adds its shortcuts again and
+    collection_write repairs the definition. An account without a cloud-storage file yet gets an empty
+    entry list: collection_write makes the file. (None, None, None) when the file can't be used."""
     try:
         with open(path, encoding='utf-8') as fh:
             data = json.load(fh)
@@ -248,6 +322,7 @@ def collection_read(path, name):
         return None, None, None
     if not isinstance(data, list):
         return None, None, None
+    index, roaming = None, None
     for i, item in enumerate(data):
         if not (isinstance(item, list) and len(item) == 2 and isinstance(item[1], dict)
                 and str(item[0]).startswith('user-collections.')):
@@ -259,11 +334,22 @@ def collection_read(path, name):
         except ValueError:
             continue
         if isinstance(coll, dict) and str(coll.get('name', '')).strip().upper() == name.strip().upper():
-            coll['added'] = [int(a) for a in coll.get('added') or []]
-            coll['removed'] = [int(a) for a in coll.get('removed') or []]
-            return data, i, coll
-    cid = 'bc250-' + ''.join('%02x' % b for b in hashlib.md5(name.encode('utf-8')).digest()[:6])
-    return data, None, {'id': cid, 'name': name, 'added': [], 'removed': []}
+            index, roaming = i, coll
+            break
+    if roaming is None:
+        cid = 'bc250-' + ''.join('%02x' % b for b in hashlib.md5(name.encode('utf-8')).digest()[:6])
+        roaming = {'id': cid, 'name': name, 'added': [], 'removed': []}
+    roaming['added'] = [int(a) for a in roaming.get('added') or []]
+    roaming['removed'] = [int(a) for a in roaming.get('removed') or []]
+    _, local = _local_read(path)
+    mine = local.get(roaming['id']) if isinstance(local.get(roaming['id']), dict) else {}
+    added = [int(a) for a in mine.get('added') or []]
+    removed = [int(a) for a in mine.get('removed') or []]
+    dirty = index is None or any(a & SHORTCUT_BIT for a in roaming['added'] + roaming['removed'])
+    coll = {'id': roaming['id'], 'name': roaming.get('name') or name,
+            'added': [] if dirty else added, 'removed': removed,
+            '_roaming': roaming, '_dirty': dirty, '_local_prev': added if dirty else []}
+    return data, index, coll
 
 
 def collection_change(coll, want, drop):
@@ -277,54 +363,229 @@ def collection_change(coll, want, drop):
     return new, plus, minus
 
 
-def namespace_register(path):
-    """Make the cloud-storage folder and list the namespace of `path` in cloud-storage-namespaces.json
-    (a list of [namespace, version]), for an account whose Steam made neither yet. Version "0": nothing of
-    it synced, so Steam merges its cloud copy in when it starts (the entry is union-collections)."""
-    folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
-    m = re.search(r'cloud-storage-namespace-(\d+)\.json$', path)
-    if not m:
+CDP_PORT = 8080
+STEAMID64_BASE = 76561197960265728
+
+
+def _state_dir():
+    return os.environ.get('XDG_STATE_HOME') or os.path.join(os.path.expanduser('~'), '.local/state')
+
+
+def _pending_path():
+    return os.path.join(_state_dir(), 'bc250-steam-collections.json')
+
+
+def _steam_root(path):
+    """Steam's folder for a cloud-storage file .../Steam/userdata/<id>/config/cloudstorage/<file>."""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(path)))))
+
+
+def _pending_change(change):
+    """Run change(pending dict) under a lock and save the result."""
+    import fcntl
+    os.makedirs(_state_dir(), exist_ok=True)
+    with open(_pending_path() + '.lock', 'w') as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            with open(_pending_path(), encoding='utf-8') as fh:
+                pending = json.load(fh)
+            if not isinstance(pending, dict):
+                pending = {}
+        except (OSError, ValueError):
+            pending = {}
+        change(pending)
+        pending = {k: v for k, v in pending.items() if v}
+        if pending:
+            with open(_pending_path() + '.tmp', 'w', encoding='utf-8') as fh:
+                json.dump(pending, fh, indent=1, sort_keys=True)
+            os.replace(_pending_path() + '.tmp', _pending_path())
+        elif os.path.exists(_pending_path()):
+            os.remove(_pending_path())
+        return pending
+
+
+def collections_kick(steam_root=None):
+    """Let Steam open its debugging port at its next start, and start the unit that makes the queued
+    collections once Steam is up (when anything is queued and it isn't running yet)."""
+    if not os.path.exists(_pending_path()):
         return
-    ns = int(m.group(1))
-    reg = os.path.join(folder, 'cloud-storage-namespaces.json')
-    try:
-        with open(reg, encoding='utf-8') as fh:
-            known = json.load(fh)
-        if not isinstance(known, list):
-            return                                  # a format we don't know: leave it to Steam
-    except FileNotFoundError:
-        known = []
-    except ValueError:
+    roots = [steam_root] if steam_root else [os.path.join(os.path.expanduser('~'), '.local/share/Steam')]
+    for root in roots:
+        if root and os.path.isdir(root):
+            open(os.path.join(root, '.cef-enable-remote-debugging'), 'a').close()
+    unit = 'bc250-steam-collections'
+    if subprocess.run(['systemctl', '--user', 'is-active', '--quiet', unit]).returncode == 0:
         return
-    if any(isinstance(k, list) and k and str(k[0]) == str(ns) for k in known):
-        return
-    known.append([ns, '0'])
-    with open(reg + '.tmp', 'w', encoding='utf-8') as fh:
-        json.dump(known, fh, separators=(',', ':'))
-    os.replace(reg + '.tmp', reg)
+    cmd = [sys.executable or 'python3', os.path.abspath(__file__), '--apply-collections']
+    if shutil.which('systemd-run'):
+        subprocess.run(['systemctl', '--user', 'reset-failed', unit], stderr=subprocess.DEVNULL)
+        if subprocess.run(['systemd-run', '--user', '--collect', '--quiet', '--unit=' + unit] + cmd).returncode == 0:
+            return
+    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
 
 
 def collection_write(path, data, index, coll):
-    """Write the collection into the cloud-storage file (a copy of the old file next to it)."""
-    now = int(time.time())
-    key = 'user-collections.%s' % coll['id']
-    entry = [key, {'key': key, 'timestamp': now,
-                   'value': json.dumps(coll, separators=(',', ':'), ensure_ascii=False),
-                   'version': str(now), 'conflictResolutionMethod': 'custom',
-                   'strMethodId': 'union-collections'}]
-    if os.path.exists(path):
-        shutil.copy2(path, '%s.bak-%s' % (path, time.strftime('%Y-%m-%d-%H%M%S')))
-    else:
-        namespace_register(path)
-    if index is None:
-        data.append(entry)
-    else:
-        data[index] = entry
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as fh:
-        json.dump(data, fh, separators=(',', ':'), ensure_ascii=False)
-    os.replace(tmp, path)
+    """Write the collection. Already in the cloud (and clean): its shortcuts into localconfig.vdf. New, or
+    its definition still holds shortcuts: queued for Steam to make (see above)."""
+    added = list(coll['added']) + [a for a in coll.get('_local_prev', []) if a not in coll['added']]
+    if index is None or coll.get('_dirty'):
+        account = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(path))))
+
+        def queue(pending):
+            mine = pending.setdefault(account, {})
+            mine[coll['name']] = sorted(set(mine.get(coll['name'], [])) | set(added))
+        _pending_change(queue)
+        collections_kick(_steam_root(path))
+        print('  collection %r: queued for Steam to make at its next start (%d shortcut%s)'
+              % (coll['name'], len(added), '' if len(added) == 1 else 's'))
+        return
+    text, local = _local_read(path)
+    if text is None:
+        print('  ! no %s yet (start Steam once): collection %r left alone' % (_localconfig(path), coll['name']))
+        return
+    local[coll['id']] = {'id': coll['id'], 'added': added, 'removed': list(coll['removed'])}
+    # Shortcuts that older versions of this script filed under an id of their own ("bc250-...") whose
+    # definition never reached the cloud: Steam has no collection for them, so they go.
+    known = {str(item[0])[len('user-collections.'):] for item in data
+             if isinstance(item, list) and item and str(item[0]).startswith('user-collections.')}
+    for cid in [c for c in local if c.startswith('bc250-') and c not in known and c != coll['id']]:
+        del local[cid]
+    _local_write(path, text, local)
+
+
+# ------------------------------------------- the Steam client, over its CEF debugging port (stdlib only)
+def _cdp_eval(expr, timeout=30):
+    """Evaluate JavaScript in the Steam client's SharedJSContext; -> its value (promises awaited)."""
+    import base64
+    import socket
+    import struct
+    import urllib.request
+    with urllib.request.urlopen('http://127.0.0.1:%d/json' % CDP_PORT, timeout=5) as r:
+        url = next((t['webSocketDebuggerUrl'] for t in json.load(r) if t.get('title') == 'SharedJSContext'), None)
+    if not url:
+        raise OSError('no SharedJSContext yet')
+    hostport, wspath = url.split('://', 1)[1].split('/', 1)
+    host, port = hostport.rsplit(':', 1)
+    if host not in ('127.0.0.1', 'localhost'):
+        raise OSError('debugger not on localhost: %s' % host)
+    s = socket.create_connection((host, int(port)), timeout=timeout)
+    try:
+        key = base64.b64encode(os.urandom(16)).decode()
+        s.sendall(('GET /%s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                   'Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n' % (wspath, hostport, key)).encode())
+        buf = b''
+        while b'\r\n\r\n' not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                raise OSError('debugger closed the connection')
+            buf += chunk
+        if b' 101 ' not in buf.split(b'\r\n', 1)[0]:
+            raise OSError('debugger refused the websocket')
+        buf = buf.split(b'\r\n\r\n', 1)[1]
+        msg = json.dumps({'id': 1, 'method': 'Runtime.evaluate',
+                          'params': {'expression': expr, 'awaitPromise': True, 'returnByValue': True}}).encode()
+        n = len(msg)
+        head = bytes([0x81]) + (bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + struct.pack('>H', n)
+                                if n < 65536 else bytes([0x80 | 127]) + struct.pack('>Q', n))
+        mask = os.urandom(4)
+        s.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(msg)))
+
+        def read(k):
+            nonlocal buf
+            while len(buf) < k:
+                chunk = s.recv(65536)
+                if not chunk:
+                    raise OSError('debugger closed the connection')
+                buf += chunk
+            out, buf = buf[:k], buf[k:]
+            return out
+        while True:
+            parts = []
+            while True:
+                b0, b1 = read(2)
+                k = b1 & 0x7f
+                if k == 126:
+                    k = struct.unpack('>H', read(2))[0]
+                elif k == 127:
+                    k = struct.unpack('>Q', read(8))[0]
+                if b1 & 0x80:
+                    read(4)
+                parts.append(read(k))
+                if b0 & 0x80:
+                    break
+            reply = json.loads(b''.join(parts).decode())
+            if reply.get('id') == 1:
+                res = reply.get('result', {})
+                if 'exceptionDetails' in res:
+                    raise OSError('JavaScript error: %s' % json.dumps(res['exceptionDetails'])[:300])
+                return res.get('result', {}).get('value')
+    finally:
+        s.close()
+
+
+_APPLY_JS = '''(async () => {
+  if (typeof collectionStore === 'undefined' || typeof appStore === 'undefined') return 'notready';
+  const want = %s;
+  if (want.some(a => !appStore.GetAppOverviewByAppID(a))) return 'notready';
+  let c = collectionStore.GetUserCollectionsByName(%s)[0];
+  if (!c) { c = collectionStore.NewUnsavedCollection(%s, undefined, []); await c.Save(); }
+  const id = c.id;
+  const have = new Set(collectionStore.GetCollection(id).allApps.map(a => a.appid));
+  const add = want.filter(a => !have.has(a));
+  if (add.length) {
+    collectionStore.AddOrRemoveApp(add, true, id);
+    await collectionStore.GetCollection(id).Save();     // the live one: a saved NewUnsavedCollection is a copy
+  }
+  return id;
+})()'''
+
+
+def apply_collections(wait=900):
+    """--apply-collections: make the queued collections through the running Steam client (waits for it)."""
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        try:
+            with open(_pending_path(), encoding='utf-8') as fh:
+                pending = json.load(fh)
+        except (OSError, ValueError):
+            return 0
+        try:
+            sid = _cdp_eval('App && App.m_CurrentUser ? App.m_CurrentUser.strSteamID : ""')
+        except (OSError, ValueError):
+            time.sleep(5)
+            continue
+        if not sid:
+            time.sleep(5)
+            continue
+        account = str(int(sid) - STEAMID64_BASE)
+        mine = pending.get(account) or {}
+        if not mine:
+            print('nothing queued for the logged-in account %s' % account)
+            return 0
+        done = []
+        for name, apps in sorted(mine.items()):
+            try:
+                cid = _cdp_eval(_APPLY_JS % (json.dumps([int(a) for a in apps]), json.dumps(name), json.dumps(name)))
+            except (OSError, ValueError) as exc:
+                print('  ! collection %r: %s' % (name, exc))
+                continue
+            if cid == 'notready':
+                continue
+            print('collection %r: made/updated by Steam (%s, %d shortcut%s)'
+                  % (name, cid, len(apps), '' if len(apps) == 1 else 's'))
+            done.append(name)
+
+        def drop(p):
+            for name in done:
+                if p.get(account, {}).get(name) == mine[name]:
+                    p[account].pop(name, None)
+        left = _pending_change(drop).get(account)
+        if not left:
+            return 0
+        time.sleep(5)
+    print('Steam was not ready in %d s: the collections stay queued for the next run' % wait)
+    return 1
 
 
 # ----------------------------------------------------------- its own shortcut
@@ -1144,7 +1405,11 @@ def main(argv=None):
     ap.add_argument('--ensure-self', action='store_true',
                     help='like --add-self, but only while Steam is not running (the user unit that '
                          'runs before Steam starts)')
+    if '--apply-collections' in (sys.argv[1:] if argv is None else argv):   # the unit collections_kick starts
+        return apply_collections()
     args = ap.parse_args(argv)
+    if not (args.dry_run or args.list):
+        collections_kick()
     if args.from_steam:
         detach_from_steam(SELF_TOOL, sys.argv[1:] if argv is None else list(argv), ['--yes', '--prune'])
 

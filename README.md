@@ -69,6 +69,18 @@ Steam is closed while the shortcut list is written and started again afterwards.
 
 - **Collection:** every shortcut it makes goes into the Steam collection **"Switch 2"** (`--collection NAME` for
   another name, `--no-collection` to leave collections alone). Shortcuts of deleted games are taken out of it.
+  How the collections are made (this script, `kytyps5-steam-sync` and every script built on them):
+  - A Steam collection is two things: its definition (name, Steam games) in Steam Cloud, and the non-Steam
+    shortcuts in it, which Steam keeps on this machine only (`localconfig.vdf`). Steam does not keep a
+    definition that another program writes into its cloud file, so a **new** collection is made by Steam
+    itself: the script queues its name and shortcuts in `~/.local/state/bc250-steam-collections.json`, and
+    the user unit `bc250-steam-collections` waits for Steam and makes it through Steam's own collection code
+    (`journalctl --user -u bc250-steam-collections`). Steam then uploads it like one made by hand, so it
+    shows on every machine of the account.
+  - For that the script creates `~/.local/share/Steam/.cef-enable-remote-debugging`: Steam then opens its
+    debugging port on 127.0.0.1:8080 (this machine only, as Decky uses it). Delete the file to close it;
+    collections that already exist keep working, new ones then wait in the queue.
+  - Shortcuts of a collection that already exists go straight into `localconfig.vdf` while Steam is closed.
 - **Sync from Steam:** the script adds a shortcut for itself, **"Sync Switch 2 games"**, so you can run it with its default
   settings from Big Picture / Gaming Mode. Started from Steam it continues in a systemd user unit of its own
   (`journalctl --user -u lichii-steam-sync` shows what it did), closes Steam while it writes and starts it again.
@@ -384,7 +396,8 @@ off** for each new shortcut (see above). `kytyps5-steam-sync --help` lists the
 other options.
 
 - **Collection:** every shortcut it makes goes into the Steam collection **"PlayStation 5"** (`--collection NAME` for
-  another name, `--no-collection` to leave collections alone). Shortcuts of deleted games are taken out of it.
+  another name, `--no-collection` to leave collections alone). Shortcuts of deleted games are taken out of it. How the
+  collection is made: see the Switch 2 section above (the same code).
 - **Sync from Steam:** the script adds a shortcut for itself, **"Sync PS5 games"**, so you can run it with its default
   settings from Big Picture / Gaming Mode. Started from Steam it continues in a systemd user unit of its own
   (`journalctl --user -u kytyps5-steam-sync` shows what it did), closes Steam while it writes and starts it again.
