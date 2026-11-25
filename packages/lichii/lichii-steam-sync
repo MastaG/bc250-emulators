@@ -42,7 +42,9 @@ What a run does:
      keeps their artwork, play time and Steam settings.
 
 Steam has to be closed while its shortcut list is written: the script stops it
-(only when something changed and no game is running) and starts it again.
+(only when something changed and no game is running) and starts it again. New
+artwork for a shortcut Steam already shows restarts it too: a running Steam
+keeps showing the shortcut without art until it starts again.
 
 Usage: lichii-steam-sync [--dry-run] [--prune] [--refresh-art] [--migrate]
                          [--env NAME=VALUE ...] [--clear-env] [--native-mesh]
@@ -1055,6 +1057,9 @@ def make_from_nintendo(meta, kind):
     return None
 
 
+ART_WRITTEN = []    # appids sync_art wrote artwork for in this run
+
+
 def sync_art(appid, meta, sgdb, grid, refresh, dry):
     """Write the missing artwork; -> path of the icon (or '')."""
     got = []
@@ -1082,6 +1087,8 @@ def sync_art(appid, meta, sgdb, grid, refresh, dry):
             got.append(kind)
     if got:
         print('  art: %s%s' % (', '.join(got), ' (would fetch)' if dry else ''))
+        if not dry:
+            ART_WRITTEN.append(appid)
     icon = os.path.join(grid, ART['icon'][0] % appid)
     return icon if os.path.exists(icon) or (dry and 'icon' in got) else ''
 
@@ -1225,6 +1232,7 @@ def main():
     print('games: %d in %s; artwork from %s' % (len(games), games_dir,
                                                 'SteamGridDB' if key else "Nintendo's store"))
     add, update = [], {}
+    art_new = False                                 # artwork written for a shortcut Steam has already
     for g in games:
         st = state.get(g, {})
         name = clean_name(os.path.basename(g))
@@ -1246,6 +1254,8 @@ def main():
         sgdb = sgdb_art(key, title) if key and (a.refresh_art or not os.path.exists(
             os.path.join(grid, ART['cover'][0] % appid))) else {}
         icon = sync_art(appid, meta, sgdb, grid, a.refresh_art, dry)
+        if k and appid in ART_WRITTEN:
+            art_new = True
         if k:
             e = entries[k]
             ours = os.path.realpath(unquote(e.get('exe', ''))) == os.path.realpath(emulator)
@@ -1327,7 +1337,8 @@ def main():
     with open(state_path + '.tmp', 'w') as fh:
         json.dump(state, fh, indent=1, sort_keys=True)
     os.replace(state_path + '.tmp', state_path)
-    if not (add or update or remove or need_coll):
+    art_restart = art_new and steam_running()
+    if not (add or update or remove or need_coll or art_restart):
         print('Steam shortcuts are up to date.')
         return 0
 
@@ -1335,7 +1346,8 @@ def main():
     if steam_running():
         if game_running():
             raise SystemExit('a game is running: close it and run this again')
-        print('stopping Steam to write its shortcut list ...')
+        print('stopping Steam to write its shortcut list ...' if add or update or remove or need_coll
+              else 'stopping Steam so it shows the new artwork ...')
         how = steam_stop()
         if not how:
             raise SystemExit('Steam did not stop, nothing written')
