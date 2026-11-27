@@ -27,6 +27,8 @@ post_install() {
     echo "==>     amdgpu sched_policy=2 vm_update_mode=0 cwsr_enable=0"
     echo "==>   - the GPU helper: sudo usermod -aG render \$USER"
     echo "==>     sudo systemctl enable --now kyty-lodhw.service"
+    echo "==>   - optional, the \"Sync PS5 games\" shortcut checked at every login:"
+    echo "==>     systemctl --user enable kytyps5-native-syncer"
     _steam_shortcut kytyps5-steam-sync
 }
 

@@ -19,6 +19,8 @@ _steam_shortcut() {
 }
 
 post_install() {
+    echo "==> Optional, the \"Sync Switch 2 games\" shortcut checked at every login:"
+    echo "==>   systemctl --user enable lichii-syncer"
     _steam_shortcut lichii-steam-sync
 }
 
