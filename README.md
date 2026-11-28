@@ -133,12 +133,18 @@ The version is the commit date, commit count and hash (`20261112.r30626.g83071fd
 ## KytyPS5-Native (kytyps5-native-git)
 
 `kytyps5-native-git` packages [KytyPS5-Native](https://github.com/superkeka/KytyPS5-Native)
-through its BC-250 beta fork [KytyPS5-Native-beta](https://github.com/dmorazasanchez/KytyPS5-Native-beta),
-which merges superkeka's `main` and adds BC-250 work (frame generation, title profiles):
+through our fork's [`bc250` branch](https://github.com/MastaG/KytyPS5-Native/tree/bc250):
+the BC-250 beta fork [KytyPS5-Native-beta](https://github.com/dmorazasanchez/KytyPS5-Native-beta)
+(frame generation, title profiles) with superkeka's `dev` merged in, UnicronNL's
+I/O and CPU work, and our read-path changes for games that stream their assets:
+- **`POSIX_FADV_RANDOM`** on the game's files (`KYTY_APR_FADVISE=normal` turns it off);
+- **reads issued ahead in the APR queue** (`KYTY_APR_LOOKAHEAD=0` turns it off);
+- **read-ahead off by default** (`KYTY_APR_READAHEAD_MB=32` turns it on; on the BC-250's PCIe 2.0 x2 M.2 it took bandwidth from the game's own reads).
+
 PS5 games, with their GPU work running natively on the BC-250's PS5 APU (gfx1013).
-It is built from the newest commit of the fork's `main` branch and rebuilt
-whenever that moves (on 2026-11-17 from superkeka's `main`, from 2026-11-12 to
-2026-11-17 from the fork's releases). The version is the commit date, commit count and hash
+It is built from the newest commit of that branch and rebuilt whenever it moves
+(from 2026-11-28; the beta fork's `main` from 2026-11-18, on 2026-11-17
+superkeka's `main`, from 2026-11-12 to 2026-11-17 the beta fork's releases). The version is the commit date, commit count and hash
 (`20261117.r2448.gf820b8e-<pkgrel>`). Only use game files you obtained legally.
 
 ```bash
@@ -199,8 +205,45 @@ What you need besides the package:
   about 12.6 of the board's 14.8 GB, so close other programs; a Steam shortcut
   (step 3) unloads Steam itself while the game runs.
 - **Disk space** for the dumps, plus shader and pipeline caches that grow per game.
+- **A game folder without btrfs compression.** CachyOS mounts btrfs with
+  `compress=zstd`. A game then reads its assets through zstd in 128 KiB blocks:
+  each small read fetches and unpacks a whole block. In a streaming open-world
+  game the disk read about 1.5 times what the game got, and every read waited longer. Turn
+  compression off for the folder **before** you copy a game into it (new
+  files inherit it):
+  ```bash
+  mkdir -p ~/Games/PS5 && chattr +m ~/Games/PS5   # lsattr -d shows the m flag
+  ```
+  A game copied there earlier stays compressed until its files are rewritten
+  (copy each file and move the copy over it). That takes more disk space:
+  a large open-world game grew by about 150 GB.
 - Vulkan through the Mesa (RADV) of [linux-cachyos-bc250](https://github.com/MastaG/linux-cachyos-bc250) for presentation and as fallback;
   the native path runs the game's own GPU commands.
+
+#### Memory and swap on our test board
+
+The package does not change any of this; it is how the board we test on is set
+up, for comparison.
+
+- **16 GB shared memory**: VRAM set to 512 MB in the BIOS (UMA), so about
+  14.8 GB is RAM. `ttm.pages_limit=3670016` gives the GPU 14 GiB of GTT (step 1).
+- **No zram** (`systemd.zram=0` on the kernel command line): a zram disk takes
+  RAM itself, which is exactly what runs short when a game uses 12+ GB.
+- **zswap** (`zswap.enabled=1 zswap.compressor=zstd zswap.max_pool_percent=25`,
+  shrinker on): pages that have to leave RAM are first compressed in RAM, up to
+  25% of it; the shrinker writes what stays cold on to the swap file.
+- **A 32 GB swap file** on the NVMe (`/var/swap/swapfile`), behind zswap.
+- **sysctl**:
+  - `vm.swappiness=100`: rather move cold pages to zswap than drop the page cache.
+  - `vm.page-cluster=0`: swap reads back one page at a time instead of eight.
+  - `vm.compaction_proactiveness=100`: keeps large contiguous blocks free for GPU allocations.
+  - `vm.vfs_cache_pressure=50` and `vm.dirty_ratio=10`.
+  - `vm.max_map_count=1048576`: emulators make tens of thousands of memory mappings.
+- **Steam closes while a PS5 game runs.** `kytyps5-run` (the Steam shortcut,
+  step 3) stops `steam-launcher.service` before the game starts. Steam takes a
+  good part of the RAM, and Gran Turismo 7 already uses about 12.6 of the
+  14.8 GB. Steam starts again after every exit of the game, including a crash
+  or a kill. `--keep-steam` in the launch options keeps it running.
 
 ### 1. Kernel parameters
 

@@ -119,12 +119,12 @@ class ResolverTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("to a commit", result.stderr)
 
-    def test_a_given_commit_is_built_from_main(self):
+    def test_a_given_commit_is_built_from_the_bc250_branch(self):
         commit = "f820b8e9" + "0" * 32
         env = dict(os.environ, KYTY_COMMIT=commit)
         result = subprocess.run([str(ROOT / "scripts/resolve-kytyps5-native.sh")],
                                 env=env, capture_output=True, text=True, check=True)
-        self.assertEqual(result.stdout.split(), ["KYTY_TAG=main", f"KYTY_COMMIT={commit}"])
+        self.assertEqual(result.stdout.split(), ["KYTY_TAG=bc250", f"KYTY_COMMIT={commit}"])
 
 
 class ReadmeTests(unittest.TestCase):

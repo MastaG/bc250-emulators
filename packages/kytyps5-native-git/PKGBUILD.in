@@ -1,13 +1,14 @@
 # Maintainer: MastaG
 #
-# KytyPS5-Native (https://github.com/superkeka/KytyPS5-Native) through the
-# BC-250 beta fork (https://github.com/dmorazasanchez/KytyPS5-Native-beta, which
-# merges superkeka's main): PS5 games with their GPU work running natively on
-# the BC-250. Built from the newest commit of the fork's main branch (since
-# 2026-11-18; 2026-11-17 from superkeka's main, 2026-11-12 to 11-17 from the
-# fork's releases), which scripts/resolve-kytyps5-native.sh pins into
-# @KYTY_COMMIT@. CI rebuilds it whenever main moves, so the repo carries a
-# nightly.
+# KytyPS5-Native (https://github.com/superkeka/KytyPS5-Native) through our
+# fork's bc250 branch (https://github.com/MastaG/KytyPS5-Native/tree/bc250):
+# the BC-250 beta fork (https://github.com/dmorazasanchez/KytyPS5-Native-beta)
+# with superkeka's dev merged in, plus UnicronNL's and our streaming work. PS5
+# games with their GPU work running natively on the BC-250. Built from the
+# newest commit of that branch (since 2026-11-28; the beta fork's main from
+# 2026-11-18, 2026-11-17 superkeka's main, 2026-11-12 to 11-17 the beta fork's
+# releases), which scripts/resolve-kytyps5-native.sh pins into @KYTY_COMMIT@.
+# CI rebuilds it whenever the branch moves, so the repo carries a nightly.
 #
 # Differences from upstream's own tarball, all because pacman owns the files:
 # - The program is installed read-only to /usr/lib/kytyps5-native. Upstream
@@ -34,7 +35,7 @@ pkgver=0
 pkgrel=@PKGREL@
 pkgdesc="PS5 games natively on the BC-250's PS5 APU (KytyPS5-Native, nightly from the BC-250 beta fork's main)"
 arch=('x86_64')
-url="https://github.com/dmorazasanchez/KytyPS5-Native-beta"
+url="https://github.com/MastaG/KytyPS5-Native/tree/bc250"
 license=('GPL-2.0-only')
 depends=('qt6-base' 'vulkan-icd-loader' 'libx11' 'libxext' 'libxcursor' 'libxi'
          'libxfixes' 'libxrandr' 'libxss' 'libxkbcommon' 'wayland' 'libpulse'
@@ -52,7 +53,7 @@ conflicts=("$_name")
 install=kytyps5-native-git.install
 # Upstream's link flags already strip the binaries.
 options=('!lto' '!debug')
-source=("$_name::git+https://github.com/dmorazasanchez/KytyPS5-Native-beta.git#commit=@KYTY_COMMIT@"
+source=("$_name::git+https://github.com/MastaG/KytyPS5-Native.git#commit=@KYTY_COMMIT@"
         'kytyps5-native-wrapper.sh'
         'kytyps5-native.desktop'
         'kyty-lodhw.service'
@@ -117,7 +118,7 @@ build() {
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DKYTY_BUILD_ORIGIN=Fork \
-        -DKYTY_BUILD_REPOSITORY=dmorazasanchez/KytyPS5-Native-beta \
+        -DKYTY_BUILD_REPOSITORY=MastaG/KytyPS5-Native \
         -DKYTY_RELEASE_TAG="@KYTY_TAG@" \
         -DKYTY_NATIVE_UPSCALER=ON
     cmake --build build --target launcher kyty_emulator kyty_updater kyty-lodhw

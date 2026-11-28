@@ -323,7 +323,7 @@ jobs:
               echo "## kytyps5-native-git $(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_PKGVER)-$(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_PKGREL)"
               echo
               commit=$(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_COMMIT)
-              echo "KytyPS5-Native, the BC-250 beta fork's main at [\`${commit:0:9}\`](https://github.com/dmorazasanchez/KytyPS5-Native-beta/commit/$commit), plus \`kytyps5-steam-sync\`."
+              echo "KytyPS5-Native, our fork's bc250 branch at [\`${commit:0:9}\`](https://github.com/MastaG/KytyPS5-Native/commit/$commit), plus \`kytyps5-steam-sync\`."
             fi
           } > "$notes"
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

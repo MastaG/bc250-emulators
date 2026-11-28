@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Resolve which KytyPS5-Native commit kytyps5-native-git builds.
 #
-# The newest commit of the dmorazasanchez/KytyPS5-Native-beta fork's main
-# branch (since 2026-11-18; 2026-11-17 superkeka/KytyPS5-Native's main, from
-# 2026-11-12 the fork's newest release, before that superkeka's newest
-# release). The fork merges superkeka's main and tags betas now and then;
-# main itself is built so the package follows it without waiting for a tag.
+# The newest commit of our MastaG/KytyPS5-Native fork's bc250 branch (since
+# 2026-11-28): dmorazasanchez/KytyPS5-Native-beta's main with superkeka's dev
+# merged in, UnicronNL's I/O and CPU work, and our APR read-path changes for
+# the BC-250 (games that stream their assets). Before that the beta fork's main (from
+# 2026-11-18), 2026-11-17 superkeka/KytyPS5-Native's main, from 2026-11-12 the
+# beta fork's newest release, before that superkeka's newest release.
 #
 # Prints an env file: KYTY_TAG (the branch, shown in the CI summary) and the
 # full commit. Set KYTY_COMMIT to build a specific commit instead.
 set -Eeuo pipefail
 
-REPOSITORY="dmorazasanchez/KytyPS5-Native-beta"
-BRANCH="main"
+REPOSITORY="MastaG/KytyPS5-Native"
+BRANCH="bc250"
 
 if [[ -n "${KYTY_COMMIT:-}" ]]; then
     commit="$KYTY_COMMIT"
