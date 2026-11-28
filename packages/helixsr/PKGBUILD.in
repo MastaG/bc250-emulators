@@ -1,0 +1,29 @@
+# Maintainer: MastaG
+#
+# HelixSR (https://github.com/lonewolf0622/HelixSR), the official release
+# archive as published, for KytyPS5-Native's HLX upscalers (HLX FSR 4; HLX DLSS
+# through HelixSR's own setup). Its licence allows redistribution only of the
+# complete, unmodified release, free of charge, so the zip is installed as it
+# is (/usr/share/helixsr); kytyps5-run unpacks the FSR 4 DLL from it into the
+# user's ~/.local/share/KytyPS5-Native/hlx at the first start, as the BC-250
+# beta fork's own launcher does. No NVIDIA file is in it or in this package.
+pkgname=helixsr
+pkgver=3.4.1
+pkgrel=@PKGREL@
+pkgdesc="HelixSR release archive (HLX FSR 4) for KytyPS5-Native's upscalers"
+arch=('any')
+url="https://github.com/lonewolf0622/HelixSR"
+license=('LicenseRef-HelixSR-Freeware')
+options=('!strip')
+source=("HelixSR-$pkgver.zip::https://github.com/lonewolf0622/HelixSR/releases/download/v$pkgver/HelixSR-$pkgver.zip")
+noextract=("HelixSR-$pkgver.zip")
+sha256sums=('31ab3fcee0aa385712c123c6717dc579c60aeaeff40f705dbe91753f96ac46da')
+
+package() {
+    install -Dm644 "HelixSR-$pkgver.zip" "$pkgdir/usr/share/helixsr/HelixSR-$pkgver.zip"
+    # The licence and notices, read from the archive (they stay in it too).
+    install -d "$pkgdir/usr/share/licenses/$pkgname"
+    bsdtar -xOf "HelixSR-$pkgver.zip" "HelixSR-$pkgver/LICENSE" > "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    bsdtar -xOf "HelixSR-$pkgver.zip" "HelixSR-$pkgver/THIRD_PARTY_NOTICES.md" \
+        > "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_NOTICES.md"
+}

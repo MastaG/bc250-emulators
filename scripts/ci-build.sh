@@ -74,6 +74,12 @@ for component in "${components[@]}"; do
                 KYTYPS5_NATIVE_GIT_FINGERPRINT="${KYTYPS5_NATIVE_GIT_FINGERPRINT:-unknown}" \
                 /workspace/scripts/build-kytyps5-native-git-package.sh || failed+=("$component")
             ;;
+        helixsr)
+            as_builder \
+                HELIXSR_PKGREL="$PKGREL" \
+                HELIXSR_FINGERPRINT="${HELIXSR_FINGERPRINT:-unknown}" \
+                /workspace/scripts/build-helixsr-package.sh || failed+=("$component")
+            ;;
         *)
             printf 'ERROR: unknown component: %s\n' "$component" >&2
             failed+=("$component")

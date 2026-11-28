@@ -75,6 +75,11 @@ case "$COMPONENT" in
                 "$ROOT_DIR"/scripts/resolve-kytyps5-native.sh
         } | sha256sum | awk '{print $1}'
         ;;
+    helixsr)
+        # A pinned release: changes only with its packaging.
+        hash_files "$ROOT_DIR"/packages/helixsr/PKGBUILD.in "$ROOT_DIR"/scripts/build-helixsr-package.sh \
+            | sha256sum | awk '{print $1}'
+        ;;
     *)
         printf 'ERROR: unknown component: %s\n' "$COMPONENT" >&2
         exit 1

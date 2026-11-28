@@ -26,6 +26,12 @@
 #   47857b4: ASTRO BOT looks washed out in HDR, upstream issue #7).
 # - kytyps5-steam-sync, our own: adds the games of a folder (~/Games/PS5) to
 #   Steam as kytyps5-run shortcuts with the game's own name and artwork.
+# - HLX (the fork's FSR 4 upscaler): the helper (beta/hlx-helper, a Winelib
+#   program) is built here with the system's wineg++ against NVIDIA's public
+#   NGX SDK headers (fetched at build time from github.com/NVIDIA/DLSS, pinned;
+#   only their declarations are compiled in, no NVIDIA file is shipped). The
+#   network comes from the helixsr package (the official HelixSR release,
+#   unmodified) and Proton 11.0 runs it; kytyps5-run sets them up per user.
 # - Nothing on the system is changed on install, not even a new group: the
 #   kernel options, the helper service and the render group membership are
 #   the owner's choice, documented in the README ("KytyPS5-Native").
@@ -40,10 +46,11 @@ license=('GPL-2.0-only')
 depends=('qt6-base' 'vulkan-icd-loader' 'libx11' 'libxext' 'libxcursor' 'libxi'
          'libxfixes' 'libxrandr' 'libxss' 'libxkbcommon' 'wayland' 'libpulse'
          'alsa-lib' 'dbus' 'systemd-libs' 'hicolor-icon-theme'
-         'python' 'python-pillow' 'xorg-xprop')
+         'python' 'python-pillow' 'xorg-xprop' 'helixsr')
 makedepends=('git' 'cmake' 'ninja' 'clang' 'lld' 'glslang' 'python' 'pkgconf'
-             'wayland-protocols' 'libxtst' 'mesa')
-optdepends=('binutils: kyty-upscaler-scan (the upscaler profile of a game, for HLX and frame generation)'
+             'wayland-protocols' 'libxtst' 'mesa' 'wine')
+optdepends=('proton-cachyos-native-bc250: Proton 11.0 for HLX FSR 4 (else Steam'"'"'s Proton 11.0)'
+            'binutils: kyty-upscaler-scan (the upscaler profile of a game, for HLX and frame generation)'
             'llvm: kyty-upscaler-scan (llvm-mc)'
             'python-numpy: a faster kyty-upscaler-scan'
             'alsa-utils: a DualSense speaker at full mixer level (amixer)'
@@ -51,8 +58,12 @@ optdepends=('binutils: kyty-upscaler-scan (the upscaler profile of a game, for H
 provides=("$_name")
 conflicts=("$_name")
 install=kytyps5-native-git.install
-# Upstream's link flags already strip the binaries.
-options=('!lto' '!debug')
+# NVIDIA's NGX SDK headers for the HLX helper (DLSS SDK 310.9.x, 2026-10-16).
+_ngx_commit=9981c6350dc58c0ce21f024fd65e31e851c31689
+_ngx=(nvsdk_ngx.h nvsdk_ngx_defs.h nvsdk_ngx_params.h nvsdk_ngx_helpers.h)
+# Upstream's link flags already strip the binaries; the HLX helper's Winelib
+# image is left as wineg++ wrote it.
+options=('!lto' '!debug' '!strip')
 source=("$_name::git+https://github.com/MastaG/KytyPS5-Native.git#commit=@KYTY_COMMIT@"
         'kytyps5-native-wrapper.sh'
         'kytyps5-native.desktop'
@@ -61,7 +72,8 @@ source=("$_name::git+https://github.com/MastaG/KytyPS5-Native.git#commit=@KYTY_C
         'kytyps5-native-syncer.service'
         'kytyps5-run-addcont.patch'
         'kytyps5-run-env.patch'
-        'kytyps5-run-zar-addcont.patch')
+        'kytyps5-run-zar-addcont.patch'
+        "${_ngx[@]/#/https://raw.githubusercontent.com/NVIDIA/DLSS/$_ngx_commit/include/}")
 sha256sums=('SKIP'
             'SKIP'
             'SKIP'
@@ -70,7 +82,11 @@ sha256sums=('SKIP'
             'SKIP'
             'SKIP'
             'SKIP'
-            'SKIP')
+            'SKIP'
+            'dc38e7467cf415379c9d12ae1b6e4a494c453ed92720fb53e92aecb523e7b848'
+            'ea23f33497cd274860d1c25a97644fce807dcb0037c594547203343103fad03e'
+            '943bc8cc5cdae03b6303016fbad3183636f2335ae27a2d18776798c3b4efabbc'
+            '5bcbadfe7478b802cf6d3aca4dc5ddd7d0889b99726e69c63f9e9bd555f44471')
 
 pkgver() {
     cd "$_name"
@@ -122,6 +138,12 @@ build() {
         -DKYTY_RELEASE_TAG="@KYTY_TAG@" \
         -DKYTY_NATIVE_UPSCALER=ON
     cmake --build build --target launcher kyty_emulator kyty_updater kyty-lodhw
+
+    # The HLX helper (its own build script; 64-bit Winelib, the system's Wine).
+    local hlx="$srcdir/$_name/beta/hlx-helper"
+    install -d "$hlx/deps/nvngx_dlss_sdk"
+    cp "${_ngx[@]/#/$srcdir/}" "$hlx/deps/nvngx_dlss_sdk/"
+    (unset CFLAGS CXXFLAGS LDFLAGS; bash "$hlx/build.sh")
 }
 
 package() {
@@ -137,6 +159,7 @@ package() {
     install -m755 "$staged/kyty_launcher" "$staged/kyty_emulator" "$staged/kyty-lodhw" \
         "$staged/kytyps5-run.sh" "$dest/"
     cp -r --no-preserve=ownership "$staged/assets" "$dest/"
+    install -Dm755 "$_name/beta/hlx-helper/hlx_server.exe.so" "$dest/hlx/hlx_server.exe.so"
     # The fork's upscaler scanner (a game's profile for HLX and frame
     # generation; it writes to ~/.config/KytyPS5-Native/upscaler-profiles), and
     # its per-game defaults and tested profiles.

@@ -47,6 +47,7 @@ jobs:
       lichii_fingerprint: ${{ steps.decide.outputs.lichii_fingerprint }}
       lichii_bc250_fingerprint: ${{ steps.decide.outputs.lichii_bc250_fingerprint }}
       kytyps5_native_git_fingerprint: ${{ steps.decide.outputs.kytyps5_native_git_fingerprint }}
+      helixsr_fingerprint: ${{ steps.decide.outputs.helixsr_fingerprint }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -106,6 +107,7 @@ jobs:
           lichii LICHII_FINGERPRINT
           lichii-bc250 LICHII_BC250_FINGERPRINT
           kytyps5-native-git KYTYPS5_NATIVE_GIT_FINGERPRINT
+          helixsr HELIXSR_FINGERPRINT
           EOF
           echo "components=${components[*]}" >> "$GITHUB_OUTPUT"
           echo "matrix=$(jq -cn '$ARGS.positional' --args "${components[@]}")" >> "$GITHUB_OUTPUT"
@@ -164,6 +166,7 @@ jobs:
           KYTY_TAG: ${{ needs.plan.outputs.kyty_tag }}
           KYTY_COMMIT: ${{ needs.plan.outputs.kyty_commit }}
           KYTYPS5_NATIVE_GIT_FINGERPRINT: ${{ needs.plan.outputs.kytyps5_native_git_fingerprint }}
+          HELIXSR_FINGERPRINT: ${{ needs.plan.outputs.helixsr_fingerprint }}
           PKGREL: ${{ github.run_number }}
         run: |
           set -euo pipefail
@@ -172,7 +175,7 @@ jobs:
             -e REPO_NAME -e PKGREL \
             -e LICHII_TAG -e LICHII_BUILD -e LICHII_COMMIT -e LICHII_FINGERPRINT \
             -e LICHII_BC250_COMMIT -e LICHII_BC250_FINGERPRINT \
-            -e KYTY_TAG -e KYTY_COMMIT -e KYTYPS5_NATIVE_GIT_FINGERPRINT \
+            -e KYTY_TAG -e KYTY_COMMIT -e KYTYPS5_NATIVE_GIT_FINGERPRINT -e HELIXSR_FINGERPRINT \
             archlinux:base-devel bash /workspace/scripts/ci-build.sh --no-database "$COMPONENT"
 
       - name: Collect the changes
@@ -324,6 +327,12 @@ jobs:
               echo
               commit=$(value kytyps5-native-git-info.env KYTYPS5_NATIVE_GIT_COMMIT)
               echo "KytyPS5-Native, our fork's bc250 branch at [\`${commit:0:9}\`](https://github.com/MastaG/KytyPS5-Native/commit/$commit), plus \`kytyps5-steam-sync\`."
+            fi
+            if [[ -f out/repo/helixsr-info.env ]]; then
+              echo
+              echo "## helixsr $(value helixsr-info.env HELIXSR_PKGVER)-$(value helixsr-info.env HELIXSR_PKGREL)"
+              echo
+              echo "The official [HelixSR](https://github.com/lonewolf0622/HelixSR/releases) release archive, unmodified (HelixSR Freeware License), for KytyPS5-Native's HLX FSR 4."
             fi
           } > "$notes"
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

@@ -40,9 +40,13 @@ export MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}"
 # and resolve the version first, put the run's pkgrel back, then build: the
 # second pkgver() finds the same version and keeps it, so a packaging-only
 # rebuild of the same commit is still an update.
-makepkg --syncdeps --noconfirm --nobuild --cleanbuild --skippgpcheck
+# helixsr (a dependency) is this repository's own package, not in Arch's: the
+# other dependencies are installed here and makepkg skips its check.
+mapfile -t deps < <(makepkg --printsrcinfo | awk -F ' = ' '/^\t(make)?depends = /{print $2}' | grep -vx helixsr)
+sudo pacman -S --needed --noconfirm "${deps[@]}"
+makepkg --nodeps --noconfirm --nobuild --cleanbuild --skippgpcheck
 sed -i "s/^pkgrel=.*/pkgrel=${PKGREL}/" PKGBUILD
-makepkg --syncdeps --noconfirm --noextract --clean --skippgpcheck
+makepkg --nodeps --noconfirm --noextract --clean --skippgpcheck
 
 shopt -s nullglob
 packages=("$BUILD_DIR"/*.pkg.tar.zst)
@@ -65,6 +69,7 @@ pkgrel="${pkgver_full##*-}"
 listing="$(bsdtar -tf "${packages[0]}")"
 for path in usr/lib/kytyps5-native/kyty_emulator usr/lib/kytyps5-native/kyty_launcher \
             usr/lib/kytyps5-native/kyty-lodhw usr/lib/kytyps5-native/kytyps5-run.sh \
+            usr/lib/kytyps5-native/hlx/hlx_server.exe.so \
             usr/lib/kytyps5-native/VERSION usr/lib/kytyps5-native/assets/fonts/NotoSans-Regular.ttf \
             usr/bin/kytyps5-native usr/bin/kytyps5-steam-sync \
             usr/lib/systemd/system/kyty-lodhw.service; do

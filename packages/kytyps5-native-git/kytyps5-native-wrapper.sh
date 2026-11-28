@@ -12,7 +12,7 @@ if [ "$(cat "$dst/VERSION" 2>/dev/null)" != "$want" ]; then
 	mkdir -p "$dst" || exit 1
 	# --remove-destination: a copy still running (another game) keeps its old
 	# files instead of failing with "text file busy".
-	for item in kyty_launcher kyty_emulator kytyps5-run.sh assets; do
+	for item in kyty_launcher kyty_emulator kytyps5-run.sh assets hlx; do
 		cp -r --remove-destination "$src/$item" "$dst/" || exit 1
 	done
 	printf '%s\n' "$want" > "$dst/VERSION"

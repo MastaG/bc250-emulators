@@ -165,6 +165,8 @@ Where everything is:
 | `/usr/bin/kytyps5-native` | Starts the launcher (also in the application menu) |
 | `/usr/bin/kytyps5-run` | Starts a game from a Steam shortcut (step 3) |
 | `/usr/bin/kytyps5-steam-sync` | Adds the games in `~/Games/PS5` to Steam as shortcuts, with their own name and artwork (step 3) |
+| `/usr/lib/kytyps5-native/hlx/` | The HLX helper (`hlx_server.exe.so`, a Winelib program built with the package) that runs HLX FSR 4 under Proton 11.0 |
+| `/usr/share/helixsr/` | The official [HelixSR](https://github.com/lonewolf0622/HelixSR) release, unmodified (package `helixsr`, a dependency). `kytyps5-run` unpacks its FSR 4 DLL into `~/.local/share/KytyPS5-Native/hlx` (with the helper's Wine prefix, made once) at the first start. Proton 11.0 comes from `proton-cachyos-native-bc250` (the BC-250 repository), or Steam's Proton 11.0. A game with a tested profile (`title-profiles`) then runs with HLX FSR 4 as its title defaults say; without these files it keeps its own upscaler |
 | `/usr/bin/kyty-upscaler-scan` | Scans a game for the upscaler and frame generation and writes its profile to `~/.config/KytyPS5-Native/upscaler-profiles/` (`kyty-upscaler-scan ensure /path/to/game`) |
 | `/usr/share/kytyps5-native-git/` | The fork's per-game defaults and tested profiles (`title-defaults`, `title-profiles`, `astro-templates`) |
 | `/usr/bin/kyty_emulator` | The emulator on the command line (`kyty_emulator --help`, `kyty_emulator --game /path/to/game`) |
